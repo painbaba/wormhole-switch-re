@@ -114,6 +114,7 @@ capture is parseable immediately:
 python3 tools/wormhole_parse.py captures/wormhole_bus3_2026-11-06.pcap
 python3 tools/wormhole_parse.py captures/wormhole_bus3_2026-11-06.pcap --json
 python3 tools/wormhole_parse.py live.pcap --hid   # peer-active capture
+python3 tools/wormhole_parse.py live.pcap --orphans   # pair HID reports with accepted 0xD9 sends; orphans = peer-side input
 python3 -m unittest tools.test_wormhole_parse
 python3 -m unittest tools.test_filter_usbmon
 python3 -m unittest tools.test_peer_rerun_send

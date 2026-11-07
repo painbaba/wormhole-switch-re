@@ -26,6 +26,12 @@ What it does
   signed X/Y/Wheel) and EP4 keyboard (8 bytes: modifiers + 6 keys).
   This is how a peer-active session differs from the idle capture
   (which has zero Wormhole interrupt traffic).
+* Pairs HID interrupt reports with the accepted 0xD9 vendor-HID sends
+  that caused them (`--orphans`) and flags reports with no matching
+  send.  A report at one cable end is caused by a send submitted at
+  the *other* end, so on a single-sided capture every received report
+  is an orphan -- which is how the bus3_live2 EP3 x=+60 report
+  (issue #15) classifies as peer-side input.
 * Summarises control / bulk / interrupt traffic per device, which is
   how "the Wormhole HID interfaces are idle" can be verified.
 
@@ -75,6 +81,7 @@ Usage
     python3 tools/wormhole_parse.py captures/wormhole_bus3_2026-11-06.pcap --device 14
     python3 tools/wormhole_parse.py captures/wormhole_bus3_2026-11-06.pcap --all --no-transactions
     python3 tools/wormhole_parse.py live.pcap --hid   # focus HID + vendor sections
+    python3 tools/wormhole_parse.py live.pcap --orphans   # pair reports <-> 0xD9 sends
 
 Exit codes: 0 success, 1 usage/IO error, 2 unsupported file format.
 """
@@ -680,6 +687,128 @@ def parse_hid_reports(packets: list[UrbPacket]) -> list[dict]:
     return reports
 
 
+# --------------------------------------------------------------------------
+# HID report <-> accepted 0xD9 send pairing (timeline walk)
+# --------------------------------------------------------------------------
+
+def wormhole_device_keys(packets: list[UrbPacket]) -> set[tuple[int, int]]:
+    """(bus, dev) of the devices enumerated as WormholeSwitch (VID:PID)."""
+    return {key for key, info in discover_devices(packets).items()
+            if info.vid == WORMHOLE_VID and info.pid == WORMHOLE_PID}
+
+
+def pair_hid_reports_to_sends(
+        packets: list[UrbPacket],
+        device_keys: set[tuple[int, int]] | None = None) -> dict:
+    """Pair Wormhole HID IN reports with the accepted 0xD9 sends behind them.
+
+    Walks the capture timeline.  Eligible sends are 0xD9 vendor-HID CBWs
+    whose CSW status is good -- CHECK CONDITION sends never forward
+    (docs/live-capture-2026-11-06.md, re-run phase P4).  Reports are
+    decoded EP3/EP4 interrupt IN reports.  A report pairs with the
+    earliest unconsumed send of the same HID type whose payload prefix
+    equals the report bytes (mouse '3': payload[0:4] = buttons/X/Y/wheel;
+    keyboard '4': payload[0:8] = mods/reserved/keys), one send per
+    report, so a second identical report with no second send stays an
+    orphan.
+
+    Matching crosses device numbers on purpose: the two cable ends
+    enumerate as different bus:dev pairs and a report received at one
+    end is caused by a send submitted at the other, so merging both
+    ends' captures pairs 1:1 (verified on live3 + bus1_live: 10/10),
+    while any single-sided capture pairs nothing -- every received
+    report is an orphan there because its sender sits on the other host,
+    outside the capture.  A single-sided orphan therefore classifies as
+    forwarded peer-side input; that is the classification of the
+    bus3_live2 EP3 x=+60 report (issue #15).  Timestamps are not
+    filtered on (the two hosts' clocks differ by a few ms); the gap is
+    reported instead.
+
+    device_keys restricts the analysis.  Default: devices enumerated as
+    VID 0711:PID 2211; if the capture holds no enumeration, the devices
+    the accepted 0xD9 sends and EP3/EP4 reports themselves point at.
+    Scoping by VID:PID keeps other bus devices' reports (input
+    receivers, etc.) out of the pairing.
+
+    Returns a JSON-serialisable dict: counts plus pairs (report + the
+    send frame and gap), orphans (reports with no matching send) and
+    unpaired_sends (accepted sends no report consumed -- their reports,
+    if any, went to the other cable end).
+    """
+    if device_keys is None:
+        device_keys = wormhole_device_keys(packets)
+        if not device_keys:
+            # Enumeration missing (capture started after the plug-in):
+            # fall back to what the traffic itself points at.
+            device_keys = set()
+            for t in parse_transactions(packets):
+                if (t.is_vendor_hid and t.csw is not None
+                        and t.csw.status == 0):
+                    device_keys.add((t.bus, t.dev))
+            for r in parse_hid_reports(packets):
+                if (r.get("decoded") and r["ep_num"]
+                        in (WORMHOLE_MOUSE_EP, WORMHOLE_KEYBOARD_EP)):
+                    device_keys.add((r["bus"], r["dev"]))
+
+    sends: list[dict] = []
+    for t in parse_transactions(packets):
+        if ((t.bus, t.dev) not in device_keys or not t.is_vendor_hid
+                or t.csw is None or t.csw.status != 0):
+            continue
+        dec = decode_vendor_cdb(t.cbw.cdb)
+        sends.append({
+            "bus": t.bus, "dev": t.dev,
+            "frame": t.cbw.frame, "ts": t.cbw.ts,
+            "hid_type": dec.get("hid_type", "unknown"),
+            "payload_hex": bytes(dec.get("payload") or []).hex(),
+        })
+    sends.sort(key=lambda s: (s["ts"], s["frame"]))
+    send_payloads = [bytes.fromhex(s["payload_hex"]) for s in sends]
+
+    reports = [r for r in parse_hid_reports(packets)
+               if (r["bus"], r["dev"]) in device_keys
+               and r.get("decoded")
+               and r["ep_num"] in (WORMHOLE_MOUSE_EP, WORMHOLE_KEYBOARD_EP)]
+    reports.sort(key=lambda r: r["ts"])
+
+    consumed = [False] * len(sends)
+    pairs: list[dict] = []
+    orphans: list[dict] = []
+    for r in reports:
+        report_bytes = bytes.fromhex(r["hex"])
+        n = 4 if r["kind"] == "mouse" else 8
+        match = None
+        for i, s in enumerate(sends):
+            if consumed[i] or s["hid_type"] != r["kind"]:
+                continue
+            if send_payloads[i][:n] == report_bytes[:n]:
+                match = i  # sends are ts-sorted, so this is FIFO
+                break
+        if match is None:
+            orphans.append(r)
+            continue
+        consumed[match] = True
+        s = sends[match]
+        pairs.append({
+            "report": r,
+            "send_bus": s["bus"], "send_dev": s["dev"],
+            "send_frame": s["frame"],
+            "send_hid_type": s["hid_type"],
+            "send_payload_hex": s["payload_hex"],
+            "gap_s": round(r["ts"] - s["ts"], 6),
+        })
+
+    unpaired = [s for i, s in enumerate(sends) if not consumed[i]]
+    return {
+        "device_keys": sorted("%d:%d" % (b, d) for b, d in device_keys),
+        "accepted_sends": len(sends),
+        "reports": len(reports),
+        "pairs": pairs,
+        "orphans": orphans,
+        "unpaired_sends": unpaired,
+    }
+
+
 def _ascii(b: bytes) -> str:
     return "".join(chr(c) if 32 <= c < 127 else "." for c in b)
 
@@ -907,6 +1036,37 @@ def _fmt_hid_section(hid_reports: list[dict], limit: int = 20) -> list[str]:
     return lines
 
 
+def _fmt_pairing(pairing: dict) -> list[str]:
+    lines = ["HID reports vs accepted 0xD9 sends (devices %s):"
+             % (", ".join(pairing["device_keys"]) or "none")]
+    lines.append("  accepted sends: %d  reports: %d  paired: %d  orphans: %d"
+                 "  unpaired sends: %d" % (
+                     pairing["accepted_sends"], pairing["reports"],
+                     len(pairing["pairs"]), len(pairing["orphans"]),
+                     len(pairing["unpaired_sends"])))
+    for p in pairing["pairs"]:
+        r = p["report"]
+        lines.append("  PAIRED  report f%-5d %d:%d EP%d %s hex=%s"
+                     " <- send f%d %d:%d payload=%s gap=%+.3fs" % (
+                         r["frame"], r["bus"], r["dev"], r["ep_num"],
+                         r["kind"], r["hex"], p["send_frame"],
+                         p["send_bus"], p["send_dev"],
+                         p["send_payload_hex"], p["gap_s"]))
+    for r in pairing["orphans"]:
+        lines.append("  ORPHAN  report f%-5d %d:%d EP%d %s hex=%s -- no"
+                     " matching accepted 0xD9 send in the analysed packets"
+                     " (single-sided capture: sender is at the other cable"
+                     " end)" % (
+                         r["frame"], r["bus"], r["dev"], r["ep_num"],
+                         r["kind"], r["hex"]))
+    for s in pairing["unpaired_sends"]:
+        lines.append("  UNPAIRED send  f%-5d %d:%d %s payload=%s -- its"
+                     " report (if any) appeared at the other cable end" % (
+                         s["frame"], s["bus"], s["dev"], s["hid_type"],
+                         s["payload_hex"]))
+    return lines
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description=(__doc__ or "").splitlines()[0])
     ap.add_argument("pcap", help="usbmon pcap (linktype 220)")
@@ -919,6 +1079,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="summary only, no per-transaction list")
     ap.add_argument("--hid", action="store_true",
                     help="emphasise HID + vendor sections (verbose HID list)")
+    ap.add_argument("--orphans", action="store_true",
+                    help="pair HID reports with accepted 0xD9 sends and "
+                         "flag reports with no matching send (issue #15)")
     ap.add_argument("--json", action="store_true", help="emit JSON")
     args = ap.parse_args(argv)
 
@@ -950,9 +1113,16 @@ def main(argv: list[str] | None = None) -> int:
     shown = [t for t in txns if want is None or (t.bus, t.dev) in want]
     txn_dicts = [transaction_to_dict(t, first_ts) for t in sorted(shown, key=lambda t: t.cbw.frame)]
 
+    pairing = None
+    if args.orphans:
+        pairing = pair_hid_reports_to_sends(
+            pcap.packets, want if args.device else None)
+
     if args.json:
         out = dict(summary)
         out["transactions"] = txn_dicts
+        if pairing is not None:
+            out["hid_send_pairing"] = pairing
         print(json.dumps(out, indent=2, sort_keys=True))
         return 0
 
@@ -986,6 +1156,10 @@ def main(argv: list[str] | None = None) -> int:
            if want is None or (r["bus"], r["dev"]) in want]
     print("\nHID interrupt reports (%d in focus):" % len(hid))
     print("\n".join(_fmt_hid_section(hid, limit=50 if args.hid else 20)))
+
+    if pairing is not None:
+        print()
+        print("\n".join(_fmt_pairing(pairing)))
     return 0
 
 
