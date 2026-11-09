@@ -11,8 +11,9 @@ Milestones track the reverse-engineering progression from initial enumeration to
 - [x] Endpoint map: EP1 IN / EP2 OUT (bulk 512 B), EP3 IN (int 8 B, 1 ms), EP4 IN (int 8 B, 4 ms)
 - [x] Sysfs paths for block device (`/dev/srX`), SCSI generic (`/dev/sgX`), hidraw (`/dev/hidraw*`), input (`/dev/input/event*`)
 - [x] Malformed `bmAttributes 0x60` (missing bit 7) documented
+- [x] Physical hardware inspected: two housings (j5create/JUC400 + wormhole), blue LEDs, warmth asymmetry documented
 
-**Deliverables:** `docs/transport.md` §Device identity, §Interfaces
+**Deliverables:** `docs/transport.md` §Device identity, §Interfaces, `architecture.html`
 
 ---
 
@@ -21,27 +22,28 @@ Milestones track the reverse-engineering progression from initial enumeration to
 - [x] INQUIRY → PDT=5 (cd/dvd), vendor `j5create`, product `WormholeSwitch`, rev `2.00`, version `0x00`
 - [x] Supported opcodes: TEST UNIT READY, INQUIRY, REQUEST SENSE, READ CAPACITY(10), READ(10)
 - [x] Rejected: LOG SENSE (0x4A), READ CAPACITY(16) (0x9E) → CHECK CONDITION / INVALID OPCODE
-- [x] Capacity anomaly: device reports 3.1 MiB (1593 × 2048), kernel exposes 15.5 MiB (31744 × 512), ISO9660 mounts at 15.5 MiB
+- [x] Capacity anomaly resolved: READ CAPACITY = 1593×2048 = 3.1 MiB (authoritative); kernel `max()` inflates to 15.5 MiB; tail unreadable (`docs/capacity-anomaly.md`)
 - [x] `sg_vpd` fails — no VPD pages
 
-**Deliverables:** `docs/transport.md` §SCSI, `docs/capture-log.md` (CBW/CSW breakdown), `docs/reproduction.md` §2
+**Deliverables:** `docs/transport.md` §SCSI, `docs/capture-log.md`, `docs/reproduction.md` §2, `docs/capacity-anomaly.md`
 
 ---
 
 ## ✅ v0.3 — ISO payload & host software inventory (Done)
 
 - [x] ISO9660 volume `WORMHOLE` (15.5 MiB) — full file listing with hashes
-- [x] Windows: `autorun.inf` → `SKLoader.exe` (MFC, signed by Magic Control Technology), embedded UPX DLL resource, `Deployment/GSDD.lst` + `GSDD.zz` (unknown container)
+- [x] Windows: `autorun.inf` → `SKLoader.exe` (MFC, signed by Magic Control Technology), embedded UPX DLL resource
 - [x] macOS: `Wormhole.app` → `WormholeShell` (Mach-O universal) → extracts `Wormhole.tgz` → `GoBridgeDemon` + `KMKeyMouse` / `KMClipboard` / `OTiTransfer` / `FileChgEvent`
 - [x] Manifest: KaiJet `Wormhole1107`, loader `1.0.1325.32`, ISO `1.0.1107.56`
+- [x] `GSDD.zz` / `GSDD.lst` container format reversed: OTiArchive DB, 29 records, repeating-XOR encrypted XML (`docs/gsdd.md`)
 
-**Deliverables:** `docs/iso-payload.md`, `docs/pe-analysis.md` (SKLoader + embedded DLL), `docs/mac-gobridge.md` (GoBridgeDemon function-level)
+**Deliverables:** `docs/iso-payload.md`, `docs/pe-analysis.md`, `docs/mac-gobridge.md`, `docs/gsdd.md`
 
 ---
 
 ## 🔄 v0.4 — UPipe protocol (file / clipboard channel) — **CURRENT**
 
-The HID injection path (`0xD9` CDB, types `'3'`/`'4'`/`'6'`) is decoded and verified end-to-end (`docs/transport.md`, `docs/live-capture-2026-11-06.md`). The **file/clipboard channel** uses the same SCSI Bulk-Only pipe with a different vendor CDB magic (not yet captured).
+The HID injection path (`0xD9` CDB, types `'3'`/`'4'`/`'6'`) is decoded and verified end-to-end. Multimedia `'6'` mapped (all-zero probe; inferred `payload[0]` = usage). The **file/clipboard channel** uses the same SCSI Bulk-Only pipe with a different vendor CDB magic (not yet captured).
 
 - [ ] Capture live peer-active session with file drag / clipboard copy (both ends running GoBridge/Wormhole)
 - [ ] Identify UPipe CDB magic byte(s) — parser already flags `candidate_upipe` for any vendor-range CDB (`0xC0`–`0xFF`) with a data phase
@@ -49,36 +51,37 @@ The HID injection path (`0xD9` CDB, types `'3'`/`'4'`/`'6'`) is decoded and veri
 - [ ] Verify bidirectional symmetry (PC A → PC B vs PC B → PC A)
 - [ ] Document in `docs/transport.md` (new section) + new `docs/upipe-protocol.md`
 
-**Blocker:** Requires two machines with GoBridge running simultaneously and a filtered usbmon capture. Parser is ready (`tools/wormhole_parse.py` decodes `0xD9` HID + flags UPipe candidates).
+**Blocker:** Requires two machines with GoBridge running simultaneously and a filtered usbmon capture. Wine/Xvfb cannot establish the peer link (OLE apartment init fails). Parser is ready (`tools/wormhole_parse.py` decodes `0xD9` HID + flags UPipe candidates). Capture pipeline verified with synthetic packets.
 
 ---
 
-## ⏳ v0.5 — Windows host software parity (Parallel)
+## 🔄 v0.5 — Windows host software parity (In progress)
 
-macOS GoBridgeDemon is analysed to function level (`docs/mac-gobridge.md`). Windows path (`SKLoader.exe` → embedded DLL → `OTiTransfer`) is only mapped at import/resource level (`docs/pe-analysis.md`).
+macOS GoBridgeDemon is analysed to function level (`docs/mac-gobridge.md`). Windows path (`SKLoader.exe` → embedded DLL → `OTiTransfer`) is mapped at import/resource level (`docs/pe-analysis.md`). GSDD container format is reversed (`docs/gsdd.md`).
 
+- [x] `GSDD.zz` / `GSDD.lst` container format — encryption/compression, role in SKLoader deployment
 - [ ] Deep decompile embedded DLL (UPX unpacked, 1,849 functions) — trace `OTi_*` exports to SCSI/HID calls
 - [ ] Map Windows HID injection: `SendInput` / `HID` API usage vs macOS `CGEvent` path
 - [ ] Map Windows file/clipboard: `OTiTransfer` → `DeviceIoControl` / `IOCTL_SCSI_PASS_THROUGH` vs macOS `SCSITask`
-- [ ] Document Windows-specific behaviours (driver signing, AutoRun deprecation, installer footprint)
+- [ ] Analyse `Wormhole.app` UI (macOS frontend) — issue #12 in progress
 - [ ] Cross-reference macOS/Windows packet formats for parity (same `0xD9` HID? same UPipe?)
 
 **Deliverable:** `docs/windows-gobridge.md` (parallel to `mac-gobridge.md`)
 
 ---
 
-## ⏳ v0.6 — Firmware mysteries (Internal cable logic)
+## ✅ v0.6 — Firmware mysteries (Partially resolved)
 
-Everything so far is **host-side observation**. The microcontroller inside the cable is a black box.
+Host-side observations resolved several firmware-adjacent questions without needing a firmware dump:
 
-- [ ] Peer-to-peer data channel: how the cable forwards `0xD9` HID and UPipe packets between ends (not visible from one host)
-- [ ] Capacity anomaly root cause: why `READ CAPACITY(10)` (3.1 MiB) ≠ kernel block device (15.5 MiB) — needs pre-enumeration kernel log or firmware dump
-- [ ] `GSDD.zz` / `GSDD.lst` container format — encryption/compression, role in SKLoader deployment
-- [ ] Multimedia HID type `'6'` wire payload layout (12 bytes) — not captured, decompiler only shows call signature
-- [ ] Whether cable forwards type `'6'` at all, and which peer endpoint it synthesises (neither HID report descriptor declares Consumer page `05 0C`)
+- [x] Capacity anomaly root cause: firmware `READ CAPACITY` (3.1 MiB) vs kernel `last_written` (15.5 MiB) — kernel `max()` in `sr.c get_sectorsize()`
+- [x] Multimedia HID type `'6'` wire payload: all-zero probe proves framing; `payload[0]` = Consumer usage (inferred from dylib); 6 usages via `'6'`, 6 via `'4'`
+- [x] 15-byte CDB truncation: host-side short send (missing pad byte), not usbmon, not firmware — wire proof in `docs/15-byte-cdb-truncation.md`
+- [x] Peer forwarding confirmed: orphan x=+60 traced to peer-side injection through cable (`docs/issue-15-mouse60-orphan.md`)
+- [ ] Peer-to-peer data channel internals: exact firmware routing between housings (not visible from one host)
 - [ ] Firmware extraction / analysis (if feasible — JTAG/SWD, DFU, or vendor update mechanism)
 
-**Approach:** Two-end simultaneous capture (usbmon on both hosts) + host-software logging correlation. Firmware dump is stretch goal.
+**Approach remaining:** Two-end simultaneous capture (usbmon on both hosts) + host-software logging correlation. Firmware dump is stretch goal.
 
 ---
 
@@ -103,8 +106,8 @@ Everything so far is **host-side observation**. The microcontroller inside the c
 | v0.2 | SCSI / Mass Storage | ✅ Done | — |
 | v0.3 | ISO payload & host inventory | ✅ Done | — |
 | v0.4 | **UPipe protocol** | 🔄 **In progress** | Next capture |
-| v0.5 | Windows host parity | ⏳ Parallel | After v0.4 |
-| v0.6 | Firmware internals | ⏳ Research | Long-term |
+| v0.5 | Windows host parity | 🔄 In progress | After v0.4 |
+| v0.6 | Firmware internals | ✅ Partially resolved | Long-term |
 | v1.0 | Stable reference release | 📋 Planned | When v0.4–0.6 converge |
 
 ---

@@ -11,6 +11,11 @@ Then interact: `sg_inq /dev/sg2`, `sg_readcap /dev/sg2`, `dd if=/dev/sr1 bs=512 
 
 - `capinfos`: 2298 packets, 199 kB, 29.03 s, 2026-11-06 10:58:43.901301 → 10:59:12.933645, encapsulation USB with Linux header and padding (115, usb-linux-mmap), SHA-256 `fff7d587ab317d5fb2cb40c194347ba40ffb6aa4b7847fd4cba02e0eb3d1c97f`, SHA1 `e0aa43c85d2bf97c01e0d3ea51d3e54241829d99`.
 - File preserved: `captures/wormhole_bus3_2026-11-06.pcap` + `wormhole_bus3_capinfos.txt`.
+  > NOTE (#17, 2026-11-08): the on-disk capture is now the Wormhole-only
+  > (3:15, 250 packets / 22 kB) filtered subset; the committed original (2,298
+  > packets) also contained IronKey `3:14` + Logitech `3:7` bus traffic. Wormhole
+  > transaction counts below are unchanged; frame numbers and packet totals
+  > refer to the original mixed capture. See `docs/issue-17-sanitise-history.md`.
 
 `tcpdump`Completion: `2298 packets captured, 0 dropped by kernel` — analysis stands without relying on later capture.
 
