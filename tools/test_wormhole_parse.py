@@ -37,12 +37,15 @@ class TestCommittedCapture(unittest.TestCase):
         cls.wormhole = [t for t in cls.txns if t.bus == 3 and t.dev == 15]
 
     def test_packet_count_and_hash(self):
-        self.assertEqual(len(self.pcap.packets), 2298)
+        # #17: committed capture is now the Wormhole-only (3:15) filtered
+        # subset (250 packets); the original mixed-bus 2,298-packet file
+        # remains in git history until a history rewrite is approved.
+        self.assertEqual(len(self.pcap.packets), 250)
         self.assertEqual(
             self.pcap.sha256,
-            "fff7d587ab317d5fb2cb40c194347ba40ffb6aa4b7847fd4cba02e0eb3d1c97f")
+            "5a135f4dc9df9cd69bcd4f3829a48a5232e6d2e1523bafb4a592905c2962b25b")
         self.assertEqual(self.pcap.linktype, 220)
-        self.assertAlmostEqual(self.pcap.duration, 29.032344, places=3)
+        self.assertAlmostEqual(self.pcap.duration, 28.370474, places=3)
 
     def test_wormhole_discovery_by_vid_pid(self):
         self.assertEqual(self.summary["wormhole_devices"], ["3:15"])
@@ -119,13 +122,15 @@ class TestCommittedCapture(unittest.TestCase):
         self.assertEqual(cfg[0].opcode_name, "GET CONFIGURATION")
 
     def test_interrupt_traffic_belongs_to_logitech_not_wormhole(self):
+        # #17: the committed capture is now Wormhole-only — the Logitech
+        # device (3:7, 1,682 interrupt completions in the original mixed
+        # capture) is gone, so the Wormhole must have zero interrupt traffic
+        # and no other device may be present.
         summary = self.summary
         for key, dev in summary["devices"].items():
             if dev["is_wormhole"]:
                 self.assertEqual(dev["by_xfer"].get("interrupt", 0), 0)
-        # Bus 3 device 7 (Logitech 046d:c548) carries all interrupt traffic.
-        logi = summary["devices"]["3:7"]
-        self.assertGreater(logi["by_xfer"].get("interrupt", 0), 1000)
+        self.assertEqual(set(summary["devices"].keys()), {"3:15"})
 
     def test_json_is_serialisable(self):
         first = self.pcap.first_ts or 0.0
@@ -429,9 +434,11 @@ class TestHidReports(unittest.TestCase):
         pcap = wp.read_pcap(PCAP)
         summary = wp.summarise(pcap)
         info = summary["devices"]["3:15"]
-        # Total HID reports are non-zero (Logitech 3:7 floods the bus),
-        # but the Wormhole device itself must have 0 reports / 0 vendor HID.
-        self.assertGreater(summary["total_hid_reports"], 0)
+        # #17: the sanitised capture is Wormhole-only, so total HID reports
+        # for the file are zero; the Wormhole device itself must have 0
+        # reports / 0 vendor HID. (In the original mixed capture the
+        # 841 total HID reports were all Logitech 3:7.)
+        self.assertEqual(summary["total_hid_reports"], 0)
         self.assertEqual(info["hid_reports"], 0)
         self.assertEqual(info["vendor_hid_packets"], 0)
         self.assertEqual(info["vendor_cdb_packets"], 0)

@@ -22,10 +22,16 @@ WORMHOLE/
 snapshot*.json
 
 # Large capture policy: pcaps are welcome if < 10 MB and sanitized;
-# ignore raw scratch dumps
-*.tmp
-*.dump
-link/
+# ignore raw scratch dumps.
+# "Sanitized" means Wormhole-only (VID 0711:2211, e.g. bus 3 dev 15):
+# filter raw usbmon dumps before adding, e.g.
+#   tshark -r <raw>.pcap -Y "usb.bus_id==3 && usb.device_address==15" -F pcap -w captures/<name>.pcap
+# Only files matching the allowlist below are tracked; anything else
+# (raw usbmon dumps, *_raw.pcap, oversize dumps) is ignored by default.
+# See docs/issue-17-sanitise-history.md.
+captures/*.pcap
+!captures/wormhole_*.pcap
+!captures/*.txt
 
 # OS / editor
 .DS_Store
@@ -37,7 +43,3 @@ link/
 # Python
 __pycache__/
 *.py[cod]
-
-# Keep the one sanitized capture in this repo
-!captures/*.pcap
-!captures/*.txt
