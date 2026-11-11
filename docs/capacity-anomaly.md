@@ -1,7 +1,7 @@
 # #13: Capacity anomaly (3.1 MiB vs 15.5 MiB) — resolved
 
 Device: `0711:2211` WormholeSwitch, `/dev/sr0` ↔ `/dev/sg1`
-(USB `3-1`, serial `C6629C6563582530`). Mount: `/media/rich/Wormhole`
+(USB `3-1`, serial `XXXXXXXXXXXXXXX0`). Mount: `/media/$USER/Wormhole`
 (ISO9660 `WORMHOLE`).
 
 ## TL;DR
@@ -37,7 +37,7 @@ Reproduction (bus numbers differ):
 lsblk -o NAME,PATH,SIZE,TYPE /dev/sr0
 blockdev --getsize64 /dev/sr0; cat /sys/block/sr0/size   # 16252928; 31744
 sg_readcap /dev/sg1                                       # Last LBA=1592
-df -B1 /media/rich/Wormhole                               # 3262464
+df -B1 /media/$USER/Wormhole                               # 3262464
 sg_raw -r 32 /dev/sg1 52 00 00 00 00 00 00 00 20 00     # track_size 0x1F00
 sg_raw -r 32 /dev/sg1 43 00 00 00 00 00 00 00 20 00     # lead-out MSF 1:47:61
 dd if=/dev/sr0 bs=2048 skip=1593 count=1 status=none | wc -c   # 2048 (zeros)

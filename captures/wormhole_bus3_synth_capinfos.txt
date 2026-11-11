@@ -3,18 +3,18 @@ File type:           Wireshark/tcpdump/... - pcap
 File encapsulation:  USB packets with Linux header and padding
 File timestamp precision:  microseconds (6)
 Packet size limit:   file hdr: 245824 bytes
-Number of packets:   140
-File size:           12 kB
-Data size:           10 kB
-Capture duration:    1.882592 second
+Number of packets:   22
+File size:           2,051 bytes
+Data size:           1,675 bytes
+Capture duration:    1.495652 second
 Earliest packet time: 2026-11-06 15:08:41.304222
-Latest packet time:   2026-11-06 15:08:43.186814
-Data byte rate:      5,454 bytes/s
-Data bit rate:       43 kbps
-Average packet size: 73.34 bytes
-Average packet rate: 74 packets/s
-SHA256:              f4695062311606e8970127a66531bdc063522d04b8f96aa258f0d02fe294c355
-SHA1:                cea10bd3b8d11d0b3ed7d91b93e6c2042b25f05c
+Latest packet time:   2026-11-06 15:08:42.799874
+Data byte rate:      1,119 bytes/s
+Data bit rate:       8,959 bits/s
+Average packet size: 76.14 bytes
+Average packet rate: 14 packets/s
+SHA256:              d20171795fa69a36a376f2c70b6295d4b255fbbf693047eb4e253b7a69cc5e39
+SHA1:                8c8f072c0217e1d6a620917cc115331ab5a9f166
 Strict time order:   True
 Number of interfaces in file: 1
 Interface #0 info:
@@ -23,4 +23,4 @@ Interface #0 info:
                      Time precision = microseconds (6)
                      Time ticks per second = 1000000
                      Number of stat entries = 0
-                     Number of packets = 140
+                     Number of packets = 22

@@ -63,7 +63,7 @@ macOS GoBridgeDemon is analysed to function level (`docs/mac-gobridge.md`). Wind
 - [ ] Deep decompile embedded DLL (UPX unpacked, 1,849 functions) — trace `OTi_*` exports to SCSI/HID calls
 - [ ] Map Windows HID injection: `SendInput` / `HID` API usage vs macOS `CGEvent` path
 - [ ] Map Windows file/clipboard: `OTiTransfer` → `DeviceIoControl` / `IOCTL_SCSI_PASS_THROUGH` vs macOS `SCSITask`
-- [ ] Analyse `Wormhole.app` UI (macOS frontend) — issue #12 in progress
+- [x] Analyse `Wormhole.app` UI (macOS frontend) — `docs/wormhole-app-ui.md` (#12)
 - [ ] Cross-reference macOS/Windows packet formats for parity (same `0xD9` HID? same UPipe?)
 
 **Deliverable:** `docs/windows-gobridge.md` (parallel to `mac-gobridge.md`)
@@ -93,7 +93,7 @@ Host-side observations resolved several firmware-adjacent questions without need
 - [ ] All captures in `captures/` are filtered, documented, and parseable by the reference parser
 - [ ] Cross-platform host-software analysis parity (macOS + Windows)
 - [ ] `README.md`, `CONTRIBUTING.md`, `ROADMAP.md`, `LICENSE` complete
-- [ ] Architecture diagram (`architecture.html`) in repo root
+- [x] Architecture diagram (`architecture.html`) in repo root
 - [ ] Tag `v1.0` — reference frozen for downstream implementers (emulators, KVM switches, protocol translators)
 
 ---

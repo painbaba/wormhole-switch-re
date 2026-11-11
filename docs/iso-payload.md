@@ -1,6 +1,6 @@
 # ISO payload: WORMHOLE volume
 
-Volume label `WORMHOLE`, ISO9660, 16252928 B (15.5 MiB block-device size), mounted read-only at `/tmp/wormhole_mnt` (first plug) and `/media/rich/Wormhole` (second plug). Contents identical between plugs.
+Volume label `WORMHOLE`, ISO9660, 16252928 B (15.5 MiB block-device size), mounted read-only at `/tmp/wormhole_mnt` (first plug) and `/media/$USER/Wormhole` (second plug). Contents identical between plugs.
 
 ```
 autorun.inf                         73 B    2013-10-31

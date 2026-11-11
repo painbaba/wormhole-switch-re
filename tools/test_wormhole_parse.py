@@ -242,7 +242,7 @@ class TestSyntheticCapture(unittest.TestCase):
     def test_synthetic_capture_hid_idle_for_wormhole(self):
         pcap = wp.read_pcap(self.SYNTH)
         summary = wp.summarise(pcap)
-        # Logitech traffic exists, but Wormhole inbound HID stays idle
+        # Wormhole inbound HID stays idle
         # on single-host injection (peer replay needs a real session).
         self.assertEqual(summary["devices"]["3:15"]["hid_reports"], 0)
 

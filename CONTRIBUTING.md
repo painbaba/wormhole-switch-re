@@ -26,7 +26,7 @@ This is a **documentation and reverse-engineering research** repository. There i
    ```
 3. If you add parser support for a new packet type, add a test case in `tools/test_wormhole_parse.py`.
 4. Update relevant docs in `docs/` (cross-link with `[link](path.md)`).
-5. Open a PR against `main`. CI is not configured; maintainers will run the tests manually.
+5. Open a PR against `main`. CI (`.github/workflows/tests.yml`) runs the unit tests.
 
 ## Adding a new capture
 
