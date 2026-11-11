@@ -702,10 +702,18 @@ def parse_hid_reports(packets: list[UrbPacket]) -> list[dict]:
 # HID report <-> accepted 0xD9 send pairing (timeline walk)
 # --------------------------------------------------------------------------
 
-def wormhole_device_keys(packets: list[UrbPacket]) -> set[tuple[int, int]]:
-    """(bus, dev) of the devices enumerated as WormholeSwitch (VID:PID)."""
-    return {key for key, info in discover_devices(packets).items()
-            if info.vid == WORMHOLE_VID and info.pid == WORMHOLE_PID}
+def wormhole_device_keys(packets: list[UrbPacket]) -> set[tuple[str, int, int]]:
+    """(capture_id, bus, dev) of the devices each capture enumerates as
+    WormholeSwitch (VID:PID).  Keys are scoped per capture: bus:dev
+    numbers are host-local, so the same numbers in two captures are
+    two devices."""
+    keys: set[tuple[str, int, int]] = set()
+    for capture_id in sorted({p.capture_id for p in packets}):
+        capture_packets = [p for p in packets if p.capture_id == capture_id]
+        for key, info in discover_devices(capture_packets).items():
+            if info.vid == WORMHOLE_VID and info.pid == WORMHOLE_PID:
+                keys.add((capture_id, key[0], key[1]))
+    return keys
 
 
 # A report pairs only with a send inside this gap window.
@@ -744,12 +752,13 @@ def pair_hid_reports_to_sends(
     enumerate as different bus:dev pairs and a report received at one
     end is caused by a send submitted at the other, so merging both
     ends' captures pairs 1:1 (verified on live3 + bus1_live: 10/10).
-    A send and a report from the same capture never pair: a host's own
-    send does not echo back to it (wormhole_bus3_synth: 1 accepted
-    send, 0 reports).  Device identity is per capture -- (capture_id,
-    bus, dev) -- so two captures that enumerate the same bus:dev
-    numbers still pair across each other; bus:dev alone is not a
-    device identity across hosts.
+    Within one capture, a send and a report on the same device never
+    pair: a host's own send does not echo back to it
+    (wormhole_bus3_synth: 1 accepted send, 0 reports).  Two cable ends
+    captured together on one host do pair, across their two devices.
+    Device identity is per capture -- (capture_id, bus, dev) -- so two
+    captures that enumerate the same bus:dev numbers still pair across
+    each other; bus:dev alone is not a device identity across hosts.
 
     The orphan label is deliberately neutral.  An orphan means only
     "no matching accepted send in the analysed packets": on a
@@ -787,11 +796,15 @@ def pair_hid_reports_to_sends(
     the result ("peer_offset_s" / "peer_offset_source"); a non-zero
     estimate is a hint of skew, not proof of causation.
 
-    device_keys restricts the analysis.  Default: devices enumerated as
-    VID 0711:PID 2211; if the capture holds no enumeration, the devices
-    the accepted 0xD9 sends and EP3/EP4 reports themselves point at.
-    Scoping by VID:PID keeps other bus devices' reports (input
-    receivers, etc.) out of the pairing.
+    device_keys restricts the analysis, as (capture_id, bus, dev)
+    triples.  Default: per capture, the devices that capture enumerates
+    as VID 0711:PID 2211; a capture with no enumeration falls back on
+    its own to the devices its accepted 0xD9 sends and EP3/EP4 reports
+    point at, so one end's missing enumeration cannot drop the other
+    end's device.  Scoping by VID:PID per capture keeps other bus
+    devices' reports (input receivers, etc.) -- and another host's
+    device that happens to reuse a peer bus:dev number -- out of the
+    pairing.
 
     Returns a JSON-serialisable dict: counts plus pairs (report + the
     send frame and gap), orphans (reports with no matching send) and
@@ -799,23 +812,31 @@ def pair_hid_reports_to_sends(
     if any, went to the other cable end).
     """
     if device_keys is None:
+        # Per-capture scoping: each capture contributes the devices it
+        # enumerates as WormholeSwitch; a capture without enumeration
+        # falls back on its own to what its traffic points at, so one
+        # end's missing plug-in window cannot drop the other end's
+        # device.
         device_keys = wormhole_device_keys(packets)
-        if not device_keys:
-            # Enumeration missing (capture started after the plug-in):
-            # fall back to what the traffic itself points at.
-            device_keys = set()
-            for t in parse_transactions(packets):
+        enumerated = {c for c, _b, _d in device_keys}
+        for capture_id in sorted({p.capture_id for p in packets}):
+            if capture_id in enumerated:
+                continue
+            capture_packets = [p for p in packets
+                               if p.capture_id == capture_id]
+            for t in parse_transactions(capture_packets):
                 if (t.is_vendor_hid and t.csw is not None
                         and t.csw.status == 0):
-                    device_keys.add((t.bus, t.dev))
-            for r in parse_hid_reports(packets):
+                    device_keys.add((capture_id, t.bus, t.dev))
+            for r in parse_hid_reports(capture_packets):
                 if (r.get("decoded") and r["ep_num"]
                         in (WORMHOLE_MOUSE_EP, WORMHOLE_KEYBOARD_EP)):
-                    device_keys.add((r["bus"], r["dev"]))
+                    device_keys.add((capture_id, r["bus"], r["dev"]))
 
     sends: list[dict] = []
     for t in parse_transactions(packets):
-        if ((t.bus, t.dev) not in device_keys or not t.is_vendor_hid
+        if ((t.capture_id, t.bus, t.dev) not in device_keys
+                or not t.is_vendor_hid
                 or t.csw is None or t.csw.status != 0):
             continue
         dec = decode_vendor_cdb(t.cbw.cdb)
@@ -830,7 +851,7 @@ def pair_hid_reports_to_sends(
     send_payloads = [bytes.fromhex(s["payload_hex"]) for s in sends]
 
     reports = [r for r in parse_hid_reports(packets)
-               if (r["bus"], r["dev"]) in device_keys
+               if (r["capture_id"], r["bus"], r["dev"]) in device_keys
                and r.get("decoded")
                and r["ep_num"] in (WORMHOLE_MOUSE_EP, WORMHOLE_KEYBOARD_EP)]
     reports.sort(key=lambda r: r["ts"])
@@ -903,7 +924,8 @@ def pair_hid_reports_to_sends(
 
     unpaired = [s for i, s in enumerate(sends) if not consumed[i]]
     return {
-        "device_keys": sorted("%d:%d" % (b, d) for b, d in device_keys),
+        "device_keys": sorted("%s %d:%d" % (c, b, d)
+                              for c, b, d in device_keys),
         "peer_offset_s": offset,
         "peer_offset_source": source,
         "accepted_sends": len(sends),
@@ -1156,7 +1178,7 @@ def _fmt_pairing(pairing: dict) -> list[str]:
         lines.append("  peer clock offset applied: %+.1f ms (%s)"
                      % (pairing["peer_offset_s"] * 1000.0, how))
         if src == "estimated":
-            lines.append("  NOTE: pairing only succeeds with this correction"
+            lines.append("  NOTE: pairing pairs more with this correction"
                          " -- the two hosts' clocks differ.  Treat the result"
                          " as skew-corrected; single-ended conclusions stay"
                          " inferred, not verified.")
@@ -1187,7 +1209,8 @@ def main(argv: list[str] | None = None) -> int:
     ap.add_argument("pcap", help="usbmon pcap (linktype 220)")
     ap.add_argument("--device", metavar="BUS:DEV",
                     help="only summarise this device, e.g. 3:15 (default: "
-                         "WormholeSwitch if found, else all devices)")
+                         "WormholeSwitch if found, else all devices); for "
+                         "--orphans the filter applies to both captures")
     ap.add_argument("--all", action="store_true",
                     help="show transactions for every device, not just Wormhole")
     ap.add_argument("--no-transactions", action="store_true",
@@ -1202,9 +1225,12 @@ def main(argv: list[str] | None = None) -> int:
                          "and sends pair across the two captures (device "
                          "identity is per capture, so equal bus:dev is fine)")
     ap.add_argument("--peer-offset", metavar="SECONDS", default="0",
-                    help="correct the report host's clock before pairing: "
-                         "float seconds, or 'auto' to pick the value in "
-                         "[+-100 ms] that maximises pairs (default: 0)")
+                    help="shift every timestamp in the peer capture "
+                         "(reports and sends alike) by -SECONDS before "
+                         "pairing; positive means the peer clock is "
+                         "ahead.  Float seconds, or 'auto' to pick the "
+                         "value in [+-100 ms] that maximises pairs "
+                         "(default: 0)")
     ap.add_argument("--json", action="store_true", help="emit JSON")
     args = ap.parse_args(argv)
 
@@ -1220,6 +1246,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # Decide which devices get a transaction listing.
     want: set[tuple[int, int]] | None
+    device_filter: set[tuple[str, int, int]] | None = None
     if args.device:
         try:
             bus_s, dev_s = args.device.split(":")
@@ -1227,6 +1254,11 @@ def main(argv: list[str] | None = None) -> int:
         except ValueError:
             print("error: --device must be BUS:DEV", file=sys.stderr)
             return 1
+        # Pairing keys are (capture_id, bus, dev); the BUS:DEV filter
+        # applies to both captures.
+        device_filter = {(capture_id, int(bus_s), int(dev_s))
+                         for capture_id in
+                         ["main"] + (["peer"] if args.peer else [])}
     elif args.all:
         want = None  # all
     elif summary["wormhole_devices"]:
@@ -1253,7 +1285,7 @@ def main(argv: list[str] | None = None) -> int:
                       file=sys.stderr)
                 return 1
         pairing = pair_hid_reports_to_sends(
-            packets, want if args.device else None,
+            packets, device_filter,
             peer_offset=peer_offset, estimate_offset=estimate,
             peer_capture_id="peer" if args.peer else None)
 

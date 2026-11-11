@@ -542,7 +542,7 @@ class TestHidSendPairing(unittest.TestCase):
         # anywhere in the capture -- an orphan, i.e. peer-side input.
         packets = [self._mouse_report(0x3C, 849, 100.0)]
         out = wp.pair_hid_reports_to_sends(packets)
-        self.assertEqual(out["device_keys"], ["3:15"])
+        self.assertEqual(out["device_keys"], ["main 3:15"])
         self.assertEqual(out["accepted_sends"], 0)
         self.assertEqual(len(out["orphans"]), 1)
         self.assertEqual(out["orphans"][0]["frame"], 849)
@@ -715,9 +715,11 @@ class TestHidSendPairing(unittest.TestCase):
         # on merged both-ends packets a report pairs across devices.
         packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.0, bus=1, dev=6)
                    + [self._mouse_report(0x3C, 20, 100.002)])
-        out = wp.pair_hid_reports_to_sends(packets,
-                                           device_keys={(1, 6), (3, 15)})
-        self.assertEqual(out["device_keys"], ["1:6", "3:15"])
+        out = wp.pair_hid_reports_to_sends(
+            packets,
+            device_keys={("main", 1, 6), ("main", 3, 15)})
+        self.assertEqual(out["device_keys"],
+                         ["main 1:6", "main 3:15"])
         self.assertEqual(len(out["pairs"]), 1)
         self.assertEqual(out["pairs"][0]["send_bus"], 1)
         self.assertEqual(out["pairs"][0]["report"]["bus"], 3)
@@ -729,7 +731,8 @@ class TestHidSendPairing(unittest.TestCase):
         packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.0, bus=1, dev=6)
                    + [self._mouse_report(0x3C, 20, 100.002)])
         out = wp.pair_hid_reports_to_sends(packets, device_keys=None)
-        self.assertEqual(out["device_keys"], ["1:6", "3:15"])
+        self.assertEqual(out["device_keys"],
+                         ["main 1:6", "main 3:15"])
         self.assertEqual(len(out["pairs"]), 1)
 
 
@@ -761,7 +764,7 @@ class TestHidSendPairingCaptures(unittest.TestCase):
         # 9 local accepted sends (x=+10/+20/+30, click, keyboard) plus
         # one EP3 x=+60 report whose sender is not in this capture.
         out = self.live3_pairing
-        self.assertEqual(out["device_keys"], ["3:15"])
+        self.assertEqual(out["device_keys"], ["main 3:15"])
         self.assertEqual(out["accepted_sends"], 9)
         self.assertEqual(out["reports"], 1)
         self.assertEqual(len(out["pairs"]), 0)
@@ -776,7 +779,7 @@ class TestHidSendPairingCaptures(unittest.TestCase):
         # The peer end sent 8 CDBs, 7 arrived 15-byte and were rejected;
         # the one accepted send is mouse x=+60 (16-byte framing).
         out = self.bus1_pairing
-        self.assertEqual(out["device_keys"], ["1:6"])
+        self.assertEqual(out["device_keys"], ["peer 1:6"])
         self.assertEqual(out["accepted_sends"], 1)
         self.assertEqual(out["reports"], 9)
         self.assertEqual(len(out["pairs"]), 0)
@@ -792,7 +795,7 @@ class TestHidSendPairingCaptures(unittest.TestCase):
         # sends across devices, in order, gaps within a few ms of clock
         # skew.  The x=+60 report's sender is the peer's frame-131 send.
         out = self.merged_pairing
-        self.assertEqual(out["device_keys"], ["1:6", "3:15"])
+        self.assertEqual(out["device_keys"], ["main 3:15", "peer 1:6"])
         self.assertEqual(out["accepted_sends"], 10)
         self.assertEqual(out["reports"], 10)
         self.assertEqual(len(out["pairs"]), 10)
@@ -811,7 +814,7 @@ class TestHidSendPairingCaptures(unittest.TestCase):
         # their senders are the 12 accepted P1-P3 sends the peer logged
         # via tools/peer_rerun_send.py (M+1, M-1, MZ, KZ per phase).
         out = self.rerun_pairing
-        self.assertEqual(out["device_keys"], ["3:15"])
+        self.assertEqual(out["device_keys"], ["main 3:15"])
         self.assertEqual(out["accepted_sends"], 0)
         self.assertEqual(out["reports"], 12)
         self.assertEqual(len(out["pairs"]), 0)
@@ -826,7 +829,7 @@ class TestHidSendPairingCaptures(unittest.TestCase):
         # out: the Wormhole had no reports and no 0xD9 sends at all.
         pcap = wp.read_pcap(PCAP)
         out = wp.pair_hid_reports_to_sends(pcap.packets)
-        self.assertEqual(out["device_keys"], ["3:15"])
+        self.assertEqual(out["device_keys"], ["main 3:15"])
         self.assertEqual(out["accepted_sends"], 0)
         self.assertEqual(out["reports"], 0)
         self.assertEqual(len(out["pairs"]), 0)
@@ -843,6 +846,40 @@ class TestHidSendPairingCaptures(unittest.TestCase):
         out = wp.pair_hid_reports_to_sends(merged)
         self.assertEqual(len(out["pairs"]), 10)
         self.assertEqual(len(out["orphans"]), 0)
+
+    def test_one_capture_without_enumeration_still_pairs(self):
+        # rtk94's 2026-11-11 review, fallback table: if one end's capture
+        # has no control transfers, the old all-or-nothing fallback
+        # dropped that end's device and every report became an orphan.
+        # The fallback is per capture now: stripping bus1_live's
+        # enumeration still pairs 10/10.
+        stripped = [p for p in self.bus1.packets if p.xfer != 2]
+        merged = sorted(self.live3.packets + stripped, key=lambda p: p.ts)
+        out = wp.pair_hid_reports_to_sends(merged)
+        self.assertEqual(out["device_keys"],
+                         ["main 3:15", "peer 1:6"])
+        self.assertEqual(len(out["pairs"]), 10)
+        self.assertEqual(len(out["orphans"]), 0)
+
+    def test_main_host_device_at_peer_bus_dev_is_excluded(self):
+        # rtk94's 2026-11-11 review, cross-capture ambiguity: another
+        # HID device sitting at the peer cable's bus:dev on the MAIN
+        # host must stay out of the pairing.  Its reports decode fine,
+        # so only the per-capture key scoping keeps it out.
+        impostor = wp.UrbPacket(
+            frame=500, ts=100.5, urb_id=500, kind="C", xfer=1,
+            endpoint=0x83, dev=6, bus=1, flag_setup=0, flag_data=0,
+            status=0, length=4, data_len=4, setup=None, interval=0,
+            transfer_flags=0, payload=bytes([0, 0x7F, 0, 0]))
+        merged = sorted(
+            self.live3.packets + self.bus1.packets + [impostor],
+            key=lambda p: p.ts)
+        out = wp.pair_hid_reports_to_sends(merged)
+        self.assertEqual(out["reports"], 10)  # impostor not analysed
+        self.assertEqual(len(out["pairs"]), 10)
+        self.assertEqual(len(out["orphans"]), 0)
+        self.assertEqual(out["device_keys"],
+                         ["main 3:15", "peer 1:6"])
 
     def test_report_clock_shift_table(self):
         # rtk94's shift table, reproduced on the committed captures:
