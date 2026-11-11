@@ -81,7 +81,7 @@ Mixed Bus 3 traffic (Wormhole 3:15 + IronKey 3:14 + others). Wormhole-only tags 
 
 Wormhole-specific in this window (`tools/wormhole_parse.py`): LOG SENSE (16) + REQUEST SENSE (16) loop, plus the single INQUIRY (2, standard + EVPD) + READ CAPACITY(10) (1) pair driven by `sg_inq`/`sg_readcap` + `dd` at 10:58:44-46, TEST UNIT READY (4), and the kernel's CD-ROM probes READ TOC/PMA/ATIP (2, `43 00…` / `43 02…`) and GET CONFIGURATION (1, `46 00…`) at frames 1385-1402. IronKey 3:14 accounts for the remaining TEST UNIT READY (14), REQUEST SENSE (28) and LOG SENSE (14); it issues no `0x43`/`0x46` in this window.
 
-READ CAPACITY(16) (`0x9E`) failed live (`sg_readcap --16` → Invalid opcode) — not emitted by the kernel in this window because the kernel already cached the 15.5 MiB size from an earlier probe. The live `sg_raw` READ CAPACITY(10) response (`00 00 06 38 00 00 08 00`) matches `sg_readcap`.
+READ CAPACITY(16) (`0x9E`) failed live (`sg_readcap --16` → Invalid opcode) — not emitted by the kernel in this window because the Linux `sr` driver sizes the disc with READ CAPACITY(10) plus `cdrom_get_last_written()` and does not issue READ CAPACITY(16) (see `docs/capacity-anomaly.md`). The live `sg_raw` READ CAPACITY(10) response (`00 00 06 38 00 00 08 00`) matches `sg_readcap`.
 
 ## HID idle
 
@@ -141,14 +141,14 @@ sg_raw -v /dev/sg2 d9 33 01 0a 00 00 00 00 00 00 00 00 00 00 4f 54
 # SCSI Status: Good
 ```
 
-Result (`captures/wormhole_bus3_synth_2026-11-06.pcap`, 140 packets,
-1.88 s, SHA-256 `f4695062311606e8970127a66531bdc063522d04b8f96aa258f0d02fe294c355`,
+Result (`captures/wormhole_bus3_synth_2026-11-06.pcap`, 22 packets
+after filtering to the Wormhole device, 1.50 s, SHA-256 `d20171795fa69a36a376f2c70b6295d4b255fbbf693047eb4e253b7a69cc5e39`,
 plus `wormhole_bus3_synth_capinfos.txt`):
 
 ```
-Vendor HID (0xD9) packets: 1  candidate UPipe: 0  HID reports: 32
+Vendor HID (0xD9) packets: 1  candidate UPipe: 0  HID reports: 0
 3:15 row: ... 3  1  0  <-- WormholeSwitch
-  f61  WORMHOLE VENDOR HID (0xD9)  CDB=d933010a000000000000000000004f54
+  f7   WORMHOLE VENDOR HID (0xD9)  CDB=d933010a000000000000000000004f54
       dir=OUT len=0  CSW=good
       vendorHID type=mouse payload=010a00000000000000000000
       footer_ok=True framing=True

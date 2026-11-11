@@ -28,7 +28,7 @@ When both ends are plugged into two PCs, each PC runs the bundled *Wormhole* / *
 |---|---|
 | USB | USB 2.00, High-Speed 480M, self-powered, MaxPower 10mA, malformed `bmAttributes 0x60` (missing must-be-set bit 7). |
 | SCSI (If 0) | Standard Bulk-Only, Bulk-Only CBW (`USBC`) / CSW (`USBS`). INQUIRY returns PDT=5 (cd/dvd), version `0x00` (no conformance claimed), vendor `j5create`, product `WormholeSwitch`, rev `2.00`. Minimal command set: `TEST UNIT READY`, `INQUIRY`, `REQUEST SENSE`, `READ CAPACITY(10)`, `READ(10)`. `LOG SENSE (0x4A)` and `READ CAPACITY(16) (0x9E)` return CHECK CONDITION / INVALID OPCODE. |
-| Capacity anomaly | `READ CAPACITY(10)` returns last LBA 1592 / 2048 B blocks (3.1 MiB), but Linux exposes `/dev/srX` as 31744×512 B (15.5 MiB) and mounts a 15.5 MiB ISO9660 volume labelled `WORMHOLE`. The reported capacity and the block-device size do not match. |
+| Capacity anomaly | `READ CAPACITY(10)` returns last LBA 1592 / 2048 B blocks (3.1 MiB), which is the usable size of the ISO9660 volume labelled `WORMHOLE`. Linux exposes `/dev/srX` as 31744×512 B (15.5 MiB) because `sr` takes `max(READ CAPACITY, last_written)` and the firmware's track information reports 7936 blocks. See `docs/capacity-anomaly.md`. |
 | HID (If 1/2) | Boot Mouse (52 B report descriptor) and Boot Keyboard (67 B). Appear as `hidraw*` + input events. Idle until peer software injects reports — see `docs/transport.md`. |
 | ISO payload | `autorun.inf` → `SKLoader.exe` (embedded UPX DLL resource) + `Deployment/GSDD.lst`/`GSDD.zz`, macOS `Wormhole.app` → `WormholeShell` → `Wormhole.tgz` → `GoBridgeDemon` + `KMKeyMouse`/`KMClipboard`/`OTiTransfer`. See `docs/iso-payload.md` and `docs/pe-analysis.md`. |
 
@@ -40,14 +40,25 @@ See [`docs/capture-log.md`](docs/capture-log.md) for a sample usbmon capture and
 .
 ├── README.md                     # this file
 ├── LICENSE                       # MIT (for documentation code/scripts)
+├── ROADMAP.md                    # milestones and open work
+├── CONTRIBUTING.md               # contribution and capture rules
+├── architecture.html             # architecture diagram
 ├── .gitignore                    # excludes firmware blobs, pcaps > policy, etc.
+├── .github/workflows/tests.yml   # CI: unit tests
 ├── docs/
 │   ├── transport.md              # USB descriptors, SCSI, HID identities
 │   ├── iso-payload.md            # ISO contents, manifests, macOS bundle map
 │   ├── pe-analysis.md            # REA PE imports/resources/certs for SKLoader.exe + embedded DLL
 │   ├── mac-gobridge.md           # GoBridgeDemon + OTiTransfer function-level analysis (HID CDB packets)
-│   ├── capture-log.md            # usbmon methodology + CBW/CSW pattern + capacity anomaly
+│   ├── capture-log.md            # usbmon methodology + CBW/CSW pattern
+│   ├── capacity-anomaly.md       # why Linux reports 15.5 MiB for a 3.1 MiB volume (#13)
 │   ├── live-capture-2026-11-06.md # live peer-active capture: injection results, sanitisation
+│   ├── 15-byte-cdb-truncation.md # short vendor CDBs in the original run (#16)
+│   ├── issue-15-mouse60-orphan.md # bus3 x=+60 report findings (#15)
+│   ├── issue-17-sanitise-history.md # capture sanitisation record (#17)
+│   ├── protocol-mouse-upipe.md   # vendor HID and UPipe protocol notes
+│   ├── gsdd.md                   # GSDD container format (#10)
+│   ├── wormhole-app-ui.md        # macOS Wormhole.app UI analysis (#12)
 │   ├── methodology.md            # REA device-protocol workflow used
 │   └── reproduction.md           # commands to re-dump this device yourself
 ├── captures/
@@ -60,10 +71,13 @@ See [`docs/capture-log.md`](docs/capture-log.md) for a sample usbmon capture and
 │   ├── wormhole_bus1_live_2026-11-06.pcap     # live peer-active, peer host
 │   ├── wormhole_bus1_live_capinfos.txt
 │   ├── wormhole_bus3_rerun_2026-11-06.pcap    # peer->local re-run, local host (Wormhole only)
-│   └── wormhole_bus3_rerun_capinfos.txt
+│   ├── wormhole_bus3_rerun_capinfos.txt
+│   ├── wormhole_bus3_live_2026-11-08.pcap     # local-host live session
+│   ├── wormhole_bus3_live_2026-11-08_1751.pcap
+│   └── wormhole_bus3_live_2026-11-08_1755.pcap
 └── tools/
     ├── wormhole_parse.py         # stdlib-only usbmon pcap parser (CBW/CSW/SCSI + vendor 0xD9 HID + boot HID reports)
-    ├── test_wormhole_parse.py    # unittest suite for the parser (42 tests)
+    ├── test_wormhole_parse.py    # unittest suite for the parser (44 tests)
     ├── filter_usbmon.py          # keep one device's records from a raw usbmon pcap (sanitising)
     ├── test_filter_usbmon.py     # unittest suite for the filter (9 tests)
     ├── peer_rerun_send.py        # logged send driver for the peer->local re-run (sg_raw and SG_IO)

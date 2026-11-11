@@ -19,7 +19,7 @@ All seven 15-byte CDBs are in `captures/wormhole_bus1_live_2026-11-06.pcap`
 local-host files named in the issue are negative controls:
 `wormhole_bus3_2026-11-06.pcap` is idle (zero `0xD9` CDBs) and
 `wormhole_bus3_synth_2026-11-06.pcap` has one 16-byte `0xD9` at frame
-61, accepted (CSW good). Frame numbers below are parser frame numbers
+7, accepted (CSW good). Frame numbers below are parser frame numbers
 (pcap record index, 1-based).
 
 | Frame | Tag | CDB (hex) | Len | CSW | Sense after |
@@ -57,7 +57,7 @@ payload content is otherwise intact.
 
 Positive controls (all accepted, all 16 bytes): 9 of 9 local to peer
 sends in `wormhole_bus3_live3_2026-11-06.pcap` (frames 43, 47, 63, 67,
-83, 87, 103, 169, 185), 1 of 1 in the synth capture (f61), 2 of 2 in
+83, 87, 103, 169, 185), 1 of 1 in the synth capture (f7), 2 of 2 in
 `wormhole_bus3_live_2026-11-08.pcap` (f3711, f3727), and 12 of 12 in
 the same-day re-run (see `docs/live-capture-2026-11-06.md`).
 

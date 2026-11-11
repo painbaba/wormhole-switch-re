@@ -13,7 +13,7 @@
   - `3:7` Logitech receiver (`046d:c548`) — 1,688 packets, 841 HID reports, 1,682 interrupt completions
   - `3:1`, `3:3`, `3:5` hubs/control — 18 packets
 
-## Sanitised replacement (this change, staged — NOT pushed)
+## Sanitised replacement
 
 - Filter: `tshark -r <original> -Y "usb.bus_id==3 && usb.device_address==15" -F pcap -w captures/wormhole_bus3_2026-11-06.pcap`
 - Result: **250 packets, 22 kB**, `3:15`-only (`tshark | sort | uniq -c` → `250  3  15`),
@@ -50,8 +50,10 @@ git filter-repo --blob-callback '
 Effects: all commit hashes from `e15d291` onward change; open PRs #24–#35 become
 unmergeable without rebase; anyone who cloned before must re-clone (no `git pull` is
 safe). Alternative if the leak is judged non-sensitive (Logitech/IronKey descriptors
-and HID reports, to be reviewed): leave history, keep the staged working-tree fix, and
+and HID reports, to be reviewed): leave history, keep the working-tree fix, and
 record the decision here.
+
+**Decision:** history rewrite deferred by the owner (recorded on issue #17). The working-tree fix stands.
 
 ## `.gitignore` (this change)
 
@@ -60,7 +62,9 @@ filter command inline. All currently tracked pcaps already match `wormhole_*`
 (`git ls-files captures/` clean). Oversize/raw dumps are ignored by default; contributors
 must filter before adding.
 
-## Follow-up (not in this change)
+## Follow-up
 
-`captures/wormhole_bus3_synth_2026-11-06.pcap` (140 packets) is also mixed-bus
-(`3:7` 70 / `3:14` 30 / `3:15` 22). It was left untouched — flag for a separate issue.
+`captures/wormhole_bus3_synth_2026-11-06.pcap` (140 packets) was also mixed-bus
+(`3:7` 70 / `3:14` 30 / `3:15` 22, plus hub traffic). The working-tree copy is now
+filtered to `3:15` (22 packets). As with the file above, the original blob remains
+in git history.

@@ -5,8 +5,8 @@ captured simultaneously on both hosts.
 
 **Summary:** complete 16-byte `0xD9` frames are forwarded in both directions. In the same-day re-run, 12 of 12 complete peer→local frames were accepted and forwarded. The 15-byte frames from the original run are rejected by the device. Details below.
 
-- Local host: Wormhole at Bus 3 Dev 15, serial `C6629C6563582530`, `/dev/sg1` (was `/dev/sg2` before re-enum), `usbmon3`
-- Peer host: Wormhole at Bus 1 Dev 6, serial `C6629C6563582531`, `/dev/sg9`, `usbmon1` (the second machine; its name and address are left out)
+- Local host: Wormhole at Bus 3 Dev 15, serial `XXXXXXXXXXXXXXX0`, `/dev/sg1` (was `/dev/sg2` before re-enum), `usbmon3`
+- Peer host: Wormhole at Bus 1 Dev 6, serial `XXXXXXXXXXXXXXX1`, `/dev/sg9`, `usbmon1` (the second machine; its name and address are left out)
 
 ## Files
 
@@ -48,7 +48,7 @@ python3 tools/filter_usbmon.py RAW.pcap --device 3:15 -o captures/OUT.pcap
 
 Checked against the raw files: for live3, the 464 Wormhole packets, the 79 SCSI transactions and the 1 HID report are identical. For the re-run, the 342 Wormhole packets and the 12 HID reports are identical. `tools/test_filter_usbmon.py` covers the filter itself.
 
-Not changed here: `captures/wormhole_bus3_2026-11-06.pcap` (committed in `e15d291`) also holds 1,688 packets from the Logitech receiver and 342 from the IronKey. Removing them from history needs a rewrite and force-push, so that is an open decision.
+Since fixed: the working-tree copy of `captures/wormhole_bus3_2026-11-06.pcap` (committed in `e15d291` with 1,688 packets from the Logitech receiver and 342 from the IronKey) is now filtered to the Wormhole. The original blob remains in git history; a rewrite was deferred by owner decision (see `docs/issue-17-sanitise-history.md`).
 
 ## Injection sequence
 
@@ -118,8 +118,7 @@ Limit: the wire CBW length on the peer was not observed. A complete frame is inf
 
 - **Closed:** host→cable `0xD9` forwarding to the peer HID interfaces works with no GoBridge/Wormhole software running. `payload[0..3]` → boot-mouse EP3, `payload[0..7]` → boot-keyboard EP4, verified byte-for-byte.
 - **Closed:** peer→local forwarding works for complete 16-byte frames: 12 of 12 in the re-run, at 2.0 s and 0.25 s spacing. The 15-byte frames are rejected by the device.
-- **Open:** why the original run sent 15-byte frames. Its typed commands weren't recorded, so the cause can't be pinned from the old capture.
+- **Closed (#16):** the original run's 15-byte frames were short sends from the peer host, which the device correctly rejected. See `docs/15-byte-cdb-truncation.md`.
 - **Open:** a peer-side wire capture (needs root on the peer), and spacing below 0.25 s.
-- **Open:** the `bus3_live2` run has one more forwarded report, EP3 `x=+60` at raw frame 849, with no `0xD9` CDBs sent from this host. Its peer side was not captured, so the sender isn't established.
-- **Open:** no live UPipe/file/clipboard traffic yet (`candidate UPipe: 0` on every capture), so the capacity-anomaly and `GSDD.zz` container questions are unchanged.
-- **Open:** the committed `captures/wormhole_bus3_2026-11-06.pcap` holds other devices' traffic (see Sanitisation).
+- **Closed (#15), by inference:** the `bus3_live2` run has one more forwarded report, EP3 `x=+60` at raw frame 849, with no `0xD9` CDBs sent from this host. That capture is unpublished and its peer side was not recorded, so the sender is inferred from the two-end run above: a peer-side injection forwarded by the cable. See `docs/issue-15-mouse60-orphan.md`.
+- **Open:** no live UPipe/file/clipboard traffic yet (`candidate UPipe: 0` on every capture), so that path remains unobserved. The capacity anomaly (`docs/capacity-anomaly.md`) and the `GSDD.zz` container (`docs/gsdd.md`) have since been analysed separately.

@@ -17,7 +17,7 @@ Bus 005 Device 003: ID 0711:2211 Magic Control Technology Corp. WormholeSwitch
   bcdDevice 1.00
   iManufacturer 1 j5create
   iProduct 2 WormholeSwitch
-  iSerial 3 C6629C6563582530
+  iSerial 3 XXXXXXXXXXXXXXX0
   bNumConfigurations 1
 ```
 
@@ -28,7 +28,7 @@ Sysfs (example at `5-3`, later `3-1`):
 
 ```
 /sys/bus/usb/devices/5-3/{bcdDevice=0100, idVendor=0711, idProduct=2211,
-  product=WormholeSwitch, manufacturer=j5create, serial=C6629C6563582530,
+  product=WormholeSwitch, manufacturer=j5create, serial=XXXXXXXXXXXXXXX0,
   busnum, devnum, devpath=3, speed=480, version=2.00}
 ```
 
@@ -98,9 +98,9 @@ CBW: 4A 01 00 00 10 00 00 00 08 00  (10-byte CDB)
   = sense key 0x05 Illegal Request, ASC 0x20 Invalid command operation code
 ```
 
-**Capacity anomaly:** `sg_readcap` consistently reports 3.1 MiB, but Linux exposes `/sys/block/srX/size = 31744` (512 B sectors) = 16252928 B (15.5 MiB) and automounts a 15.5 MiB ISO9660 volume labelled `WORMHOLE` (`file -s /dev/sr2: ISO 9660 CD-ROM 'WORMHOLE'`, `lsblk` `sr1 15.5M /media/rich/WORMHOLE`). Kernel block size and device-reported capacity do not agree. `READ CAPACITY(16)` is unsupported, so the kernel fallback is not observable from `sg` alone — flagged as unknown.
+**Capacity anomaly:** `sg_readcap` consistently reports 3.1 MiB, but Linux exposes `/sys/block/srX/size = 31744` (512 B sectors) = 16252928 B (15.5 MiB) and automounts the ISO9660 volume labelled `WORMHOLE` on that 15.5 MiB block device (`file -s /dev/sr2: ISO 9660 CD-ROM 'WORMHOLE'`, `lsblk` `sr1 15.5M /media/$USER/WORMHOLE`). Kernel block size and device-reported capacity disagree because Linux `sr` takes `max(READ CAPACITY, last_written)` and the firmware's TRACK INFORMATION / TOC lead-out reports 7936 blocks. The usable size is 3.1 MiB; see [`capacity-anomaly.md`](capacity-anomaly.md).
 
-Iso content at `/media/rich/WORMHOLE` is byte-identical to the first `/tmp/wormhole_mnt` dump (see `docs/iso-payload.md`).
+Iso content at `/media/$USER/WORMHOLE` is byte-identical to the first `/tmp/wormhole_mnt` dump (see `docs/iso-payload.md`).
 
 ## HID report descriptors (sysfs)
 
@@ -121,7 +121,7 @@ Read via `/sys/class/hidraw/hidrawX/device/report_descriptor`:
   ```
   Generic Desktop Keyboard → Application collection, 8 modifiers, 1 constant byte, 6 key codes (0x00-0xFF), then a Usage Page 0x08 (LEDs) Output section.
 
-Both HID devices report `Uniq=C6629C6563582530` (same as USB serial) and `Name=j5create WormholeSwitch`.
+Both HID devices report `Uniq=XXXXXXXXXXXXXXX0` (same as USB serial) and `Name=j5create WormholeSwitch`.
 
 ## Peer link: vendor SCSI CDB packets (host → cable)
 

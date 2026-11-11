@@ -39,6 +39,6 @@ Followed `reverse-engineer-anything` v49 → `references/device-protocol-analysi
 
 - `GSDD.zz` / `GSDD.lst` container format (encryption/compression) and their role in SKLoader deployment.
 - Bridge peer-to-peer data channel between the two cable ends (internal to the microcontroller, not enumerated from one host).
-- Why kernel block size (15.5 MiB) disagrees with `READ CAPACITY(10)` (3.1 MiB) — requires pre-plug kernel log or firmware dump to resolve.
+- Resolved: kernel block size (15.5 MiB) exceeds `READ CAPACITY(10)` (3.1 MiB) because Linux `sr` takes `max(READ CAPACITY, last_written)`. See [`capacity-anomaly.md`](capacity-anomaly.md).
 - File/clipboard **UPipe** packet magic and framing beyond the HID `D9` format — needs a live peer-active usbmon capture (see `docs/reproduction.md` §6). `tools/wormhole_parse.py` now has a vendor-CDB decoder (`0xD9` HID + `candidate_upipe` for other `0xC0`–`0xFF` CDBs) so the next capture is immediately parseable; only the UPipe magic itself remains unknown until that capture runs.
 - Cable-side forwarding (how the microcontroller routes CDB packets to the peer end) is not in host binaries; needs firmware or two-end capture.

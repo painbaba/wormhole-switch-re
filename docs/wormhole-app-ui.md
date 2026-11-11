@@ -2,7 +2,7 @@
 
 Tooling: Ghidra 12.1.4 via REA (see `docs/pe-analysis.md` *Tooling*).
 Bundle source: `/tmp/wormhole_extract/Wormhole.app/` (the
-`/media/rich/Wormhole/Wormhole.app/` mount was absent in this
+`/media/$USER/Wormhole/Wormhole.app/` mount was absent in this
 environment; the `/tmp/wormhole_extract` copy is the same bundle
 extracted from the ISO — all hashes below are for that copy).
 Binaries are scratch extracts (not tracked):
