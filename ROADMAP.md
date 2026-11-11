@@ -77,7 +77,7 @@ Host-side observations resolved several firmware-adjacent questions without need
 - [x] Capacity anomaly root cause: firmware `READ CAPACITY` (3.1 MiB) vs kernel `last_written` (15.5 MiB) — kernel `max()` in `sr.c get_sectorsize()`
 - [x] Multimedia HID type `'6'` wire payload: all-zero probe proves framing; `payload[0]` = Consumer usage (inferred from dylib); 6 usages via `'6'`, 6 via `'4'`
 - [x] 15-byte CDB truncation: host-side short send (missing pad byte), not usbmon, not firmware — wire proof in `docs/15-byte-cdb-truncation.md`
-- [x] Peer forwarding confirmed: orphan x=+60 traced to peer-side injection through cable (`docs/issue-15-mouse60-orphan.md`)
+- [x] Peer forwarding confirmed; `bus3_live2` orphan x=+60 attributed to peer-side injection through cable by inference (`docs/issue-15-mouse60-orphan.md`)
 - [ ] Peer-to-peer data channel internals: exact firmware routing between housings (not visible from one host)
 - [ ] Firmware extraction / analysis (if feasible — JTAG/SWD, DFU, or vendor update mechanism)
 
