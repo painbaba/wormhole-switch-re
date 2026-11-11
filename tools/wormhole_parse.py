@@ -697,6 +697,20 @@ def wormhole_device_keys(packets: list[UrbPacket]) -> set[tuple[int, int]]:
             if info.vid == WORMHOLE_VID and info.pid == WORMHOLE_PID}
 
 
+# A report pairs only with a send inside this gap window.
+# Empirical basis: the 10 merged live3 + bus1_live pairs span -0.56 to
+# +2.02 ms (median +1.3 ms, 9 of 10 positive), measured on the committed
+# captures.  All 10 still match with +5/-1 ms bounds, so those bounds
+# work.  (The re-run's 1-4 ms-before figure in
+# docs/live-capture-2026-11-06.md line 110 is measured against the peer's
+# send log in a different session -- a different kind of timestamp -- and
+# is not the basis here.)  50 ms forward is ~25x the largest observed
+# delay; 10 ms backward is ~5x the largest observed early arrival and
+# tolerates host clock skew.
+PAIR_WINDOW_S = 0.05
+PAIR_SKEW_S = 0.01
+
+
 def pair_hid_reports_to_sends(
         packets: list[UrbPacket],
         device_keys: set[tuple[int, int]] | None = None) -> dict:
@@ -715,14 +729,30 @@ def pair_hid_reports_to_sends(
     Matching crosses device numbers on purpose: the two cable ends
     enumerate as different bus:dev pairs and a report received at one
     end is caused by a send submitted at the other, so merging both
-    ends' captures pairs 1:1 (verified on live3 + bus1_live: 10/10),
-    while any single-sided capture pairs nothing -- every received
-    report is an orphan there because its sender sits on the other host,
-    outside the capture.  A single-sided orphan therefore classifies as
-    forwarded peer-side input; that is the classification of the
-    bus3_live2 EP3 x=+60 report (issue #15).  Timestamps are not
-    filtered on (the two hosts' clocks differ by a few ms); the gap is
-    reported instead.
+    ends' captures pairs 1:1 (verified on live3 + bus1_live: 10/10).
+    A send and a report on the same device never pair: a host's own
+    send does not echo back to it (wormhole_bus3_synth: 1 accepted
+    send, 0 reports), and a same-device payload match is unrelated
+    peer-side input, so it stays an orphan.  Any single-sided capture
+    therefore pairs nothing -- every received report is an orphan there
+    because its sender sits on the other host, outside the capture.  A
+    single-sided orphan therefore classifies as forwarded peer-side
+    input; that is the classification of the bus3_live2 EP3 x=+60
+    report (issue #15).
+
+    Causality and time window: a send can only cause a report that
+    arrives at (or, within clock skew, just before) the report, so only
+    sends whose gap falls in [-PAIR_SKEW_S, PAIR_WINDOW_S] are
+    considered, and a report never pairs with a send later than that
+    skew allows.  Measured on the committed captures, the 10 merged
+    live3 + bus1_live pairs span -0.56 to +2.02 ms (median +1.3 ms, 9
+    of 10 positive); all 10 still match with +5/-1 ms bounds.  (The
+    re-run's 1-4 ms-before-peer-send-log figure is a different session
+    and timestamp, not the basis here.)  50 ms forward is ~25x the
+    largest observed delay; 10 ms backward is ~5x the largest observed
+    early arrival and tolerates host clock skew.  Out-of-window and
+    report-much-later-than-send cases stay orphans, and the reported gap
+    keeps its sign so skew stays visible.
 
     device_keys restricts the analysis.  Default: devices enumerated as
     VID 0711:PID 2211; if the capture holds no enumeration, the devices
@@ -781,8 +811,14 @@ def pair_hid_reports_to_sends(
         for i, s in enumerate(sends):
             if consumed[i] or s["hid_type"] != r["kind"]:
                 continue
+            if (s["bus"], s["dev"]) == (r["bus"], r["dev"]):
+                continue  # a host's own send never echoes back a report
+            if not (-PAIR_SKEW_S <= r["ts"] - s["ts"] <= PAIR_WINDOW_S):
+                continue  # a send cannot cause a report far before it
+                          # exists, and a send older than the window is
+                          # stale; small negative gaps are clock skew
             if send_payloads[i][:n] == report_bytes[:n]:
-                match = i  # sends are ts-sorted, so this is FIFO
+                match = i  # sends are ts-sorted, so this is FIFO within the window
                 break
         if match is None:
             orphans.append(r)

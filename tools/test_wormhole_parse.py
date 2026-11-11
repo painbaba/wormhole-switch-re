@@ -507,7 +507,10 @@ class TestHidSendPairing(unittest.TestCase):
         return self._hid(3, bytes([0, x & 0xFF, 0, 0]), frame, ts, bus, dev)
 
     def test_accepted_send_pairs_with_report(self):
-        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.0)
+        # The send is at the other cable end (bus 1); a host's own send
+        # on the same device never echoes back as a report.
+        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.0,
+                              bus=1, dev=6)
                    + [self._mouse_report(0x3C, 20, 100.002)])
         out = wp.pair_hid_reports_to_sends(packets)
         self.assertEqual(out["accepted_sends"], 1)
@@ -525,7 +528,8 @@ class TestHidSendPairing(unittest.TestCase):
     def test_rejected_send_never_pairs(self):
         # Re-run P4: a CHECK CONDITION (15-byte) send is rejected and
         # forwards nothing, so the following report has no sender here.
-        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.0, status=1)
+        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.0,
+                              status=1, bus=1, dev=6)
                    + [self._mouse_report(0x3C, 20, 100.002)])
         out = wp.pair_hid_reports_to_sends(packets)
         self.assertEqual(out["accepted_sends"], 0)
@@ -545,7 +549,8 @@ class TestHidSendPairing(unittest.TestCase):
         self.assertEqual(out["orphans"][0]["x"], 60)
 
     def test_value_mismatch_is_orphan(self):
-        packets = (self._send("3", bytes([0x00, 0x0A]), 10, 100.0)
+        packets = (self._send("3", bytes([0x00, 0x0A]), 10, 100.0,
+                              bus=1, dev=6)
                    + [self._mouse_report(0x3C, 20, 100.002)])
         out = wp.pair_hid_reports_to_sends(packets)
         self.assertEqual(len(out["pairs"]), 0)
@@ -555,17 +560,96 @@ class TestHidSendPairing(unittest.TestCase):
     def test_type_mismatch_is_orphan(self):
         # A keyboard send cannot cause a mouse report (type byte '3' vs
         # '4' and EP3 vs EP4 must agree).
-        packets = (self._send("4", bytes([0x00, 0x00, 0x04]), 10, 100.0)
+        packets = (self._send("4", bytes([0x00, 0x00, 0x04]), 10, 100.0,
+                              bus=1, dev=6)
                    + [self._mouse_report(0x00, 20, 100.002)])
         out = wp.pair_hid_reports_to_sends(packets)
         self.assertEqual(len(out["pairs"]), 0)
         self.assertEqual(len(out["orphans"]), 1)
         self.assertEqual(out["orphans"][0]["kind"], "mouse")
 
+    def test_report_before_send_stays_orphan(self):
+        # The reviewer's repro: a matching send AFTER the report cannot
+        # have caused it -- pairing stays off regardless of FIFO order.
+        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.100,
+                              bus=1, dev=6)
+                   + [self._mouse_report(0x3C, 20, 100.0)])
+        out = wp.pair_hid_reports_to_sends(packets)
+        self.assertEqual(len(out["pairs"]), 0)
+        self.assertEqual(len(out["orphans"]), 1)
+        self.assertEqual(len(out["unpaired_sends"]), 1)
+
+    def test_stale_send_outside_window_stays_orphan(self):
+        # A matching send far older than the window (here 1 s; observed
+        # merged pairs span -0.56 to +2.02 ms) is not a plausible cause:
+        # orphan.
+        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 99.0,
+                              bus=1, dev=6)
+                   + [self._mouse_report(0x3C, 20, 100.0)])
+        out = wp.pair_hid_reports_to_sends(packets)
+        self.assertEqual(len(out["pairs"]), 0)
+        self.assertEqual(len(out["orphans"]), 1)
+        self.assertEqual(len(out["unpaired_sends"]), 1)
+
+    def test_send_within_window_pairs_and_gap_is_positive(self):
+        # 40 ms is inside the 50 ms forward window: it pairs, and the
+        # reported gap keeps its sign (here positive).
+        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 99.960,
+                              bus=1, dev=6)
+                   + [self._mouse_report(0x3C, 20, 100.0)])
+        out = wp.pair_hid_reports_to_sends(packets)
+        self.assertEqual(len(out["pairs"]), 1)
+        self.assertAlmostEqual(out["pairs"][0]["gap_s"], 0.040, places=6)
+
+    def test_in_window_negative_gap_pairs(self):
+        # An 8 ms early report is within the clock-skew allowance: it
+        # pairs, and the gap is reported negative.
+        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.008,
+                              bus=1, dev=6)
+                   + [self._mouse_report(0x3C, 20, 100.0)])
+        out = wp.pair_hid_reports_to_sends(packets)
+        self.assertEqual(len(out["pairs"]), 1)
+        self.assertAlmostEqual(out["pairs"][0]["gap_s"], -0.008, places=6)
+
+    def test_gap_just_outside_forward_bound_stays_orphan(self):
+        # +60 ms is just outside the 50 ms forward bound: orphan, so
+        # widening PAIR_WINDOW_S to 0.9 no longer passes the suite.
+        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 99.940,
+                              bus=1, dev=6)
+                   + [self._mouse_report(0x3C, 20, 100.0)])
+        out = wp.pair_hid_reports_to_sends(packets)
+        self.assertEqual(len(out["pairs"]), 0)
+        self.assertEqual(len(out["orphans"]), 1)
+        self.assertEqual(len(out["unpaired_sends"]), 1)
+
+    def test_gap_just_outside_backward_bound_stays_orphan(self):
+        # -20 ms is just outside the 10 ms skew bound: orphan, so
+        # widening PAIR_SKEW_S to 0.09 no longer passes the suite.
+        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.020,
+                              bus=1, dev=6)
+                   + [self._mouse_report(0x3C, 20, 100.0)])
+        out = wp.pair_hid_reports_to_sends(packets)
+        self.assertEqual(len(out["pairs"]), 0)
+        self.assertEqual(len(out["orphans"]), 1)
+        self.assertEqual(len(out["unpaired_sends"]), 1)
+
+    def test_same_device_send_never_pairs(self):
+        # The reviewer's repro: a local accepted send followed 2 ms
+        # later by a matching report on the same device is not a pair --
+        # a host's own send never echoes back, so the report stays an
+        # orphan (genuine peer-side input keeps its orphan status).
+        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.0)
+                   + [self._mouse_report(0x3C, 20, 100.002)])
+        out = wp.pair_hid_reports_to_sends(packets)
+        self.assertEqual(len(out["pairs"]), 0)
+        self.assertEqual(len(out["orphans"]), 1)
+        self.assertEqual(len(out["unpaired_sends"]), 1)
+
     def test_send_is_consumed_one_to_one(self):
         # Two identical reports but one send: the second report stays
         # unmatched instead of reusing the consumed send.
-        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.0)
+        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.0,
+                              bus=1, dev=6)
                    + [self._mouse_report(0x3C, 20, 100.002),
                       self._mouse_report(0x3C, 30, 100.004)])
         out = wp.pair_hid_reports_to_sends(packets)
@@ -574,8 +658,10 @@ class TestHidSendPairing(unittest.TestCase):
         self.assertEqual(len(out["unpaired_sends"]), 0)
 
     def test_fifo_consumes_earliest_send(self):
-        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.0, tag=0x101)
-                   + self._send("3", bytes([0x00, 0x3C]), 14, 100.1, tag=0x102)
+        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.0,
+                              tag=0x101, bus=1, dev=6)
+                   + self._send("3", bytes([0x00, 0x3C]), 14, 100.1,
+                                tag=0x102, bus=1, dev=6)
                    + [self._mouse_report(0x3C, 20, 100.002)])
         out = wp.pair_hid_reports_to_sends(packets)
         self.assertEqual(len(out["pairs"]), 1)
