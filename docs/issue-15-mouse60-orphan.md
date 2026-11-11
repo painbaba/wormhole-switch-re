@@ -1,16 +1,22 @@
 # Issue #15 — bus3 orphan `x=+60`: findings
 
-**Verdict: (1) peer-side injection (cable forwarding).** The `+60`
-report is not orphaned once the other end of the cable is looked at:
-it is the cable's forwarding of the peer host's `SendMouseEvent`
-`0xD9` CDB, delivered to the local host as an EP3 interrupt-IN
-report. The local host sent **no** `0xD9` CDB in this run, so on a
-single-end capture the report looks senderless — expected, because
-the *received* direction never has a matching local CDB.
+**Verdict: peer-side injection (cable forwarding) is the
+best-supported explanation for `bus3_live2` frame 849, but it is
+inferred, not observed.** No peer capture or record of the typed
+commands exists for that run. Interference from other devices on the
+local bus is ruled out, and a stale report is not supported.
+
+The mechanism is established by the two-end `live3` + `bus1_live`
+run: a report the local host receives is the cable's forwarding of
+the peer host's `SendMouseEvent` `0xD9` CDB, delivered as an EP3
+interrupt-IN report. The *received* direction never has a matching
+local CDB, so on a single-end capture a forwarded report looks
+senderless.
 
 Scope note: `bus3_live2` itself (6202 raw packets, SHA-256
-`285d8271…`, EP3 `x=+60` at raw frame 849) is **unpublished**, so it
-is not directly parsed here. `captures/wormhole_bus3_live3_2026-11-06.pcap`
+`285d8271…`, EP3 `x=+60` at raw frame 849) is **unpublished**, because
+it holds other devices' traffic. It is analysed directly in the next
+section. `captures/wormhole_bus3_live3_2026-11-06.pcap`
 + `captures/wormhole_bus1_live_2026-11-06.pcap` are the simultaneously
 captured two-end run written up in `docs/live-capture-2026-11-06.md`
 and exhibit the identical phenomenon with the peer side captured —
@@ -20,7 +26,141 @@ anywhere: 0 vendor-HID CDBs, 12 HID reports with mouse
 `x ∈ {+1, −1, 0}` only. It is a synthetic control (see
 `tools/peer_rerun_send.py`), not the source of the orphan.
 
-## The orphan packet (parser-true, raw bytes verified)
+## `bus3_live2` frame 849: raw capture analysis
+
+Times are offsets from the capture's first packet.
+
+| Check | Result |
+|---|---|
+| Frame 849 | Interrupt IN completion, device 3:15 endpoint `0x83`, status 0, 4 bytes `00 3c 00 00` (no buttons, `x=+60`, `y=0`, wheel 0), at t=13.676 s |
+| EP3 URB | No submit before frame 849. Frame 850 resubmits the same URB 19 µs later, so the URB was armed before the capture started. EP4 has no traffic |
+| Host→Wormhole commands | 70 CBWs: 35 `0x4A`, 35 REQUEST SENSE. Tags run `0x2c4` to `0x309` with no gap |
+| `0xD9` on any device | None. The only other SCSI device, the IronKey at 3:14, carries only TEST UNIT READY, REQUEST SENSE and `0x4A` |
+| Other traffic to the Wormhole | Three `GET_DESCRIPTOR` control reads in the first 4 ms. No other control transfers to the Wormhole or either hub, so no bus reset or reconfiguration request |
+| Timing | 593 ms after the previous poll and 1.43 s before the next. Poll spacing stays 2.012 to 2.020 s for the whole run |
+| Neighbouring packets | None on any device for 154 ms before or 46 ms after frame 849, apart from its own resubmit |
+
+The tag check is what rules out a `0xD9` CDB that the capture missed:
+in live3 the 9 local `0xD9` CDBs take consecutive tags in the same
+sequence as the polls, so a missed CBW would show as a gap. The
+capture file does not record tcpdump's drop count.
+
+| Hypothesis | Conclusion | Strength |
+|---|---|---|
+| Peer-side `0xD9` send | Best-supported explanation | Strong inference, not observed |
+| Cross-device interference | Ruled out on the local bus | Direct from this capture |
+| Stale state | Not supported | Strong for the host side and a queued report, untestable for firmware that withholds a report |
+
+**Peer-side injection.** What supports it:
+
+- All 22 Wormhole reports in the five published 2026-11-06 captures
+  have a known send behind them. In the two-end run, the 9 peer-side reports follow
+  their local CBWs by 1.2 to 2.0 ms with matching payloads, and the
+  1 local report is within 0.6 ms of the peer's accepted CBW. These
+  are cross-host clocks, so read them only as "about the same moment".
+  The re-run's 12 reports match `tools/peer_rerun_send.py`'s send
+  order and spacing, but its peer send log is not in this repository.
+- Mouse and keyboard sends don't echo to the sender: none of the 11
+  local sends of those types (9 in live3, 1 in the synthetic run, 1 in
+  `captures/wormhole_bus3_live_2026-11-08.pcap`) and none of the 8 peer
+  sends produced a matching report on the sending side. So even a local
+  send that escaped the capture would not explain frame 849.
+- Frame 849 is byte-identical to live3's report from the peer's `+60`
+  send. Seen from the local side, live3's peer sequence is 7 short
+  frames rejected silently and one `+60` delivered. If the same
+  sequence ran at 15:35, this is the expected result.
+
+What limits it:
+
+- The published peer capture starts 19 min 42 s after this run ends.
+- A rejected peer send leaves no local trace, so the local capture
+  can't show whether the peer was active at all.
+- The typed commands weren't recorded, and the `+60` match is a
+  single byte.
+- The absence of unexplained reports on 2026-11-06 is weak on its
+  own. About 220 s of capture that day plus `bus3_live`'s 48.5 s with
+  zero reports (taken from the Files table in
+  `docs/live-capture-2026-11-06.md`) gives a 95% upper bound near one
+  spontaneous report per 90 s, which doesn't exclude one in a 70 s run.
+- A later capture does hold a report with no known send behind it.
+  `captures/wormhole_bus3_live_2026-11-08.pcap` has one EP3 report,
+  `00000000`, between a local `'6'` probe's CBW and CSW. Its peer side
+  wasn't captured, so its origin is unknown
+  (`docs/protocol-mouse-upipe.md` §2.1.1). An idle report carries no
+  movement, so it doesn't explain `x=+60`, but "every report has a
+  known send" holds only for the 2026-11-06 captures.
+- Even granting a peer send, no capture settles which actor issued it:
+  an operator running `sg_raw`, or GoBridge forwarding real input.
+
+**Cross-device interference.** Ruled out on the local bus. "EP3" alone
+doesn't identify the Wormhole, because the Logitech receivers at 3:5
+and 3:7 also declare interrupt endpoint `0x83`, so the attribution
+rests on the device number usbmon stamps on each record. Frame 849 is
+recorded against 3:15 and is the only completion with data on `0x83`
+in this run. The Logitech receiver at 3:7 reports on its own endpoints
+(`0x81` and `0x82`) with different lengths, 155 ms before and 145 ms
+after frame 849. Devices on the peer host are not visible here. The
+only host→cable HID path identified is `0xD9`, so any such device
+would have to go through a program issuing those frames, which is the
+first hypothesis.
+
+**Stale state.** Not supported, by case:
+
+- Host side: the completion carries status 0 and 4 data bytes from the
+  device, so it isn't a buffer left over on the host.
+- A report queued in the cable before the capture: the URB was armed
+  throughout and the endpoint is polled every 125 µs (`bInterval 1`,
+  high speed), so a waiting report would have been collected long
+  before t=13.7 s.
+- An earlier send held over: the only recorded `+60` send is live3's,
+  20 minutes after this run. Adding the local→peer and peer→local
+  report-minus-CBW times cancels the clock offset: across live3's 5
+  mouse frames the two one-way delays sum to 0.67–0.75 ms. The
+  peer→local direction is a single sample.
+- Not testable: firmware that withholds a report and releases it later
+  can't be excluded from USB traces. On what is known about the cable,
+  it would still need a peer-side send as the report's origin, so it
+  would change when the peer sent, not who did.
+
+**What further work could settle.** A new run can't identify who sent
+this historical frame. A long no-send soak captured at both ends
+(`docs/reproduction.md` §6, `sudo` on the peer) would test something
+the existing captures don't: whether reports ever appear without a
+send. Direct evidence of this frame's sender could only come from the
+peer's shell history or terminal log from about 15:35 that day, if any
+survives.
+
+To repeat the main checks against the raw file:
+
+```sh
+RAW=wormhole_bus3_live2_2026-11-06.pcap
+python3 tools/wormhole_parse.py "$RAW" --hid | grep -E 'Vendor HID|f849'
+tshark -r "$RAW" -Y 'usb.device_address==15 && usb.transfer_type==1' \
+  -T fields -e frame.number -e usb.urb_type -e usb.endpoint_address
+python3 tools/wormhole_parse.py "$RAW" --json | python3 -c 'import json,sys; t=[int(x["tag"],16) for x in json.load(sys.stdin)["transactions"]]; print(hex(t[0]),hex(t[-1]),t==list(range(t[0],t[-1]+1)))'
+```
+
+The last command filters its output deliberately. Raw `--json` output
+includes every device's HID reports, even with `--device`, so don't
+publish it.
+
+To re-derive the delay sum from the published captures:
+
+```sh
+python3 - <<'PY'
+import sys; sys.path.insert(0, "tools")
+import wormhole_parse as wp
+local = wp.read_pcap("captures/wormhole_bus3_live3_2026-11-06.pcap").packets
+peer = wp.read_pcap("captures/wormhole_bus1_live_2026-11-06.pcap").packets
+d9 = lambda pkts: [t for t in wp.parse_transactions(pkts) if t.is_vendor_hid]
+out = [r["ts"] - t.cbw.ts for t, r in zip(d9(local), wp.parse_hid_reports(peer)) if r["ep_num"] == 3]
+sent = next(t for t in d9(peer) if len(t.cbw.cdb) == 16)
+back = wp.parse_hid_reports(local)[0]["ts"] - sent.cbw.ts
+print("%.2f-%.2f ms over %d mouse frames" % ((min(out) + back) * 1e3, (max(out) + back) * 1e3, len(out)))
+PY
+```
+
+## The matching `+60` report in `live3` (parser-true, raw bytes verified)
 
 Published file `captures/wormhole_bus3_live3_2026-11-06.pcap`
 (frame numbers below are `wormhole_parse.py` numbers on the filtered
@@ -46,7 +186,7 @@ interrupts between f130 and f133.
 ## Peer side, same wall-clock instant (bus1 capture)
 
 Because both hosts were captured simultaneously, absolute pcap
-timestamps can be compared (fit: `+1.2–1.7 ms` local-CDB→peer-EP
+timestamps can be compared (fit: `+1.2–2.0 ms` local-CDB→peer-EP
 latency throughout, no drift — the two clocks agree to a few ms;
 clocks were *not* NTP-locked to sub-ms, see caveat).
 
@@ -63,7 +203,7 @@ clocks were *not* NTP-locked to sub-ms, see caveat).
 
 Reverse direction in the same run, for symmetry: all 9 bus-3 CDBs
 (16-byte, good) appear on bus 1 as 9/9 EP reports (`x=+10/+20/+30`,
-click, `'a'`, `'c'`) 1.2–1.7 ms later.
+click, `'a'`, `'c'`) 1.2–2.0 ms later.
 
 Why **only** the `+60` is forwarded among the 8 peer sends: the
 other 7 arrived as 15-byte CDBs (one `00` missing before the `OT`
@@ -77,7 +217,7 @@ signature of a lone well-framed peer send in this run — see
 `docs/live-capture-2026-11-06.md` "Peer → local: mostly rejected /
 truncated".
 
-## Hypotheses
+## Hypotheses for the `live3` report
 
 | # | Hypothesis | Verdict | Evidence |
 |---|---|---|---|
@@ -88,10 +228,9 @@ truncated".
 
 ## Caveats
 
-- `bus3_live2` (the issue's file) is unpublished; for *that* run the
-  sender remains unproven byte-for-byte — same mechanism inferred.
-  If the raw file surfaces, the test is whether a one-end-only EP3
-  report has a peer CDB; but no peer capture exists for that run.
+- `bus3_live2` (the issue's file) is unpublished and has no peer
+  capture, so for *that* run the sender is inferred from the mechanism
+  shown here, not observed.
 - The −0.56 ms "EP-before-CDB-sub" needs no special pleading: the
   two pcap timestamps come from two different machines' kernels
   (offsets differ by 2.2 s of capture start; `usbmon` submit records
@@ -120,7 +259,7 @@ truncated".
 >   0/0` — none is `0x3c`.
 > - Peer side: bus1 f131, bulk-OUT CBW, `d933003c0000…4f54` (16 B,
 >   `CSW=good`), abs 15:57:09.341 vs bus3 EP 15:57:09.340 (two
->   machines' clocks agree to ~1 ms — cf. 1.2–1.7 ms CDB→EP latency
+>   machines' clocks agree to ~1 ms — cf. 1.2–2.0 ms CDB→EP latency
 >   for all 9 local→peer packets). Same event, other end of cable.
 > - Only `+60` is forwarded because the other 7 peer CDBs (`X=+40`,
 >   `+50`, click, `'b'`, wheel) arrived 15-byte short and were
