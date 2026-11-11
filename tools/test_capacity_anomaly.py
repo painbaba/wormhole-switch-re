@@ -97,6 +97,12 @@ class TestCandidateEnumerationResponses(unittest.TestCase):
                                     last_written=0),
                 ca.SYSFS_SIZE_512B)
 
+    def test_candidates_device_bytes_use_remapped_block_len(self):
+        # sr.c remaps 0/2340/2352 to 2048, so every candidate's device
+        # view is the full ISO size, not the raw wire block length.
+        for c in ca.responses_producing_sysfs_size():
+            self.assertEqual(c["device_bytes"], ca.ISO_BYTES)
+
     def test_candidates_raw_bytes(self):
         raws = {c["raw"] for c in ca.responses_producing_sysfs_size()}
         self.assertIn("00001eff00000800", raws)  # last LBA 7935 / 2048 B

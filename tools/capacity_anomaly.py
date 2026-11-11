@@ -177,10 +177,11 @@ def responses_producing_sysfs_size(
     bytes it would appear as on the wire.
 
     Block lengths 0, 2340 and 2352 are included because sr.c remaps them
-    to 2048 before the *4 conversion.  This list is not exhaustive once
-    ``last_written`` is applied: any 2048-family answer with
-    ``last_lba < LAST_WRITTEN_BLOCKS`` is also raised to 31744 by the
-    ``max()`` (including the recorded steady-state response).
+    to 2048 before the *4 conversion; ``device_bytes`` therefore uses the
+    post-remap block length (2048), not the raw wire value.  This list is
+    not exhaustive once ``last_written`` is applied: any 2048-family answer
+    with ``last_lba < LAST_WRITTEN_BLOCKS`` is also raised to 31744 by
+    the ``max()`` (including the recorded steady-state response).
     """
     candidates = []
     for block_len in (512, 2048, 0, 2340, 2352):
@@ -190,11 +191,12 @@ def responses_producing_sysfs_size(
         blocks = sysfs_size // per_512
         last_lba = blocks - 1
         raw = (last_lba.to_bytes(4, "big") + block_len.to_bytes(4, "big"))
+        effective = 2048 if block_len in (0, 2340, 2352) else block_len
         candidates.append({
             "last_lba": last_lba,
             "block_len": block_len,
             "blocks": blocks,
-            "device_bytes": blocks * block_len,
+            "device_bytes": blocks * effective,
             "raw": raw.hex(),
         })
     return candidates
