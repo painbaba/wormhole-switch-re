@@ -77,7 +77,7 @@ See [`docs/capture-log.md`](docs/capture-log.md) for a sample usbmon capture and
 │   └── wormhole_bus3_live_2026-11-08_1755.pcap
 └── tools/
     ├── wormhole_parse.py         # stdlib-only usbmon pcap parser (CBW/CSW/SCSI + vendor 0xD9 HID + boot HID reports)
-    ├── test_wormhole_parse.py    # unittest suite for the parser (66 tests)
+    ├── test_wormhole_parse.py    # unittest suite for the parser (72 tests)
     ├── filter_usbmon.py          # keep one device's records from a raw usbmon pcap (sanitising)
     ├── test_filter_usbmon.py     # unittest suite for the filter (9 tests)
     ├── peer_rerun_send.py        # logged send driver for the peer->local re-run (sg_raw and SG_IO)

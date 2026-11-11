@@ -592,14 +592,56 @@ class TestHidSendPairing(unittest.TestCase):
         self.assertEqual(len(out["unpaired_sends"]), 1)
 
     def test_send_within_window_pairs_and_gap_is_positive(self):
-        # 40 ms is inside the 50 ms forward window: it pairs, and the
-        # reported gap keeps its sign (here positive).
+        # 40 ms is inside the 50 ms forward window: it pairs.  Gaps are
+        # signed (the negative-gap case below pairs at -8 ms); this one
+        # happens to be positive.
         packets = (self._send("3", bytes([0x00, 0x3C]), 10, 99.960,
                               bus=1, dev=6)
                    + [self._mouse_report(0x3C, 20, 100.0)])
         out = wp.pair_hid_reports_to_sends(packets)
         self.assertEqual(len(out["pairs"]), 1)
         self.assertAlmostEqual(out["pairs"][0]["gap_s"], 0.040, places=6)
+
+    def test_peer_offset_corrects_report_clock(self):
+        # The report host's clock runs ahead: the report is stamped
+        # 60 ms after its send, outside the 50 ms window.  A known
+        # +60 ms correction (subtracted from report timestamps) pairs
+        # it, and the reported gap is the corrected one.
+        packets = (self._send("3", bytes([0x00, 0x3C]), 10, 100.0,
+                              bus=1, dev=6)
+                   + [self._mouse_report(0x3C, 20, 100.060)])
+        self.assertEqual(len(wp.pair_hid_reports_to_sends(packets)["pairs"]), 0)
+        out = wp.pair_hid_reports_to_sends(packets, peer_offset=0.060)
+        self.assertEqual(len(out["pairs"]), 1)
+        self.assertAlmostEqual(out["pairs"][0]["gap_s"], 0.0, places=6)
+        self.assertEqual(out["peer_offset_source"], "flag")
+        self.assertAlmostEqual(out["peer_offset_s"], 0.060, places=9)
+
+    def test_offset_estimate_recovers_synthetic_skew(self):
+        # All sends on one host, all reports on the other; the report
+        # host's clock runs ~70 ms ahead, so every raw gap leaves the
+        # window.  Zero-offset pairing finds nothing; auto-estimation
+        # finds a correcting offset in the grid and pairs 10/10.  (The
+        # estimator returns the least correction consistent with the
+        # data -- the pairing window is 60 ms wide, so the recovered
+        # value need not equal the planted skew exactly.)
+        sends = []
+        reports = []
+        for i in range(10):
+            x = 0x10 + i
+            sends += self._send("3", bytes([0x00, x]), 10 + i * 10,
+                                100.0 + i * 0.05, bus=1, dev=6)
+            reports.append(self._mouse_report(
+                x, 20 + i * 10, 100.0 + i * 0.05 + 0.0013 + 0.070,
+                bus=3, dev=15))
+        merged = sorted(sends + reports, key=lambda p: p.ts)
+        zero = wp.pair_hid_reports_to_sends(merged)
+        self.assertEqual(len(zero["pairs"]), 0)
+        est = wp.pair_hid_reports_to_sends(merged, estimate_offset=True)
+        self.assertEqual(est["peer_offset_source"], "estimated")
+        self.assertGreaterEqual(est["peer_offset_s"], -0.100)
+        self.assertLessEqual(est["peer_offset_s"], 0.100)
+        self.assertEqual(len(est["pairs"]), 10)
 
     def test_in_window_negative_gap_pairs(self):
         # An 8 ms early report is within the clock-skew allowance: it
@@ -706,7 +748,7 @@ class TestHidSendPairingCaptures(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.live3 = wp.read_pcap(cls.LIVE3)
-        cls.bus1 = wp.read_pcap(cls.BUS1)
+        cls.bus1 = wp.read_pcap(cls.BUS1, capture_id="peer")
         cls.rerun = wp.read_pcap(cls.RERUN)
         cls.live3_pairing = wp.pair_hid_reports_to_sends(cls.live3.packets)
         cls.bus1_pairing = wp.pair_hid_reports_to_sends(cls.bus1.packets)
@@ -789,6 +831,61 @@ class TestHidSendPairingCaptures(unittest.TestCase):
         self.assertEqual(out["reports"], 0)
         self.assertEqual(len(out["pairs"]), 0)
         self.assertEqual(len(out["orphans"]), 0)
+
+    def test_same_bus_dev_across_captures_still_pairs(self):
+        # rtk94's remap repro: the peer capture enumerates the SAME
+        # bus:dev numbers as live3.  Device identity is per capture
+        # ((capture_id, bus, dev)), so this still pairs 10/10; a
+        # bus:dev-only identity silently dropped it to 0.
+        from dataclasses import replace
+        remapped = [replace(p, bus=3, dev=15) for p in self.bus1.packets]
+        merged = sorted(self.live3.packets + remapped, key=lambda p: p.ts)
+        out = wp.pair_hid_reports_to_sends(merged)
+        self.assertEqual(len(out["pairs"]), 10)
+        self.assertEqual(len(out["orphans"]), 0)
+
+    def test_report_clock_shift_table(self):
+        # rtk94's shift table, reproduced on the committed captures:
+        # shifting bus1_live (the report end) by Delta and pairing at
+        # offset 0 is exactly "pairing failing in a way that looks like
+        # skew".  Measured: 10 / 9 / 1 / 0 pairs at 0 / +12 / -20 /
+        # +100 ms.
+        from dataclasses import replace
+        measured = {0.0: 10, 0.012: 9, -0.020: 1, 0.100: 0}
+        for delta, expected in sorted(measured.items()):
+            shifted = [replace(p, ts=p.ts + delta) for p in self.bus1.packets]
+            merged = sorted(self.live3.packets + shifted,
+                            key=lambda p: p.ts)
+            out = wp.pair_hid_reports_to_sends(merged)
+            self.assertEqual(len(out["pairs"]), expected,
+                             "shift %r ms" % (delta * 1000.0))
+            # and the failure is recoverable: correcting the peer
+            # capture's clock re-pairs 10/10 for every shift in the table
+            est = wp.pair_hid_reports_to_sends(
+                merged, estimate_offset=True, peer_capture_id="peer")
+            self.assertEqual(len(est["pairs"]), 10,
+                             "recovery at shift %r ms" % (delta * 1000.0))
+
+    def test_cli_peer_flag_pairs_two_captures(self):
+        # --peer replaces the external mergecap step: the two halves of
+        # the 2026-11-08 session pair directly from the CLI.
+        import contextlib
+        import io as _io
+        buf = _io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = wp.main([str(self.LIVE3), "--orphans", "--peer",
+                          str(self.BUS1), "--json"])
+        self.assertEqual(rc, 0)
+        out = json.loads(buf.getvalue())
+        self.assertEqual(len(out["hid_send_pairing"]["pairs"]), 10)
+
+    def test_orphan_wording_is_neutral(self):
+        # rtk94: a single-sided orphan must not claim the sender is at
+        # the other cable end -- state the absence, not an origin.
+        blob = "\n".join(wp._fmt_pairing(self.live3_pairing))
+        self.assertIn(
+            "no matching accepted 0xD9 send in the analysed packets", blob)
+        self.assertNotIn("other cable end", blob)
 
     def test_pairing_output_is_json_serialisable(self):
         blob = json.dumps(self.merged_pairing, sort_keys=True)
